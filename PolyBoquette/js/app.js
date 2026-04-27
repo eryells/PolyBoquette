@@ -15,9 +15,10 @@ const state = {
     currentView: 'dashboard',
     currentMarketId: null,
     selectedOptionId: null,
-    chartHidden: false,    // préférence utilisateur : masquer le graphe
-    leaderboard: [],       // top 10 classement
-    canClaim: false        // bonus quotidien disponible
+    chartHidden: false,
+    leaderboard: [],
+    canClaim: false,
+    dashTab: 'markets'   // 'markets' | 'leaderboard'
 };
 
 const PALETTE = ['#22c55e', '#ef4444', '#3b82f6', '#d946ef', '#f97316', '#eab308', '#06b6d4'];
@@ -835,6 +836,11 @@ const app = {
         }
         updateNavbar();
         app.navigate('dashboard');
+    },
+
+    switchTab: (tab) => {
+        state.dashTab = tab;
+        render();
     }
 };
 
@@ -973,27 +979,125 @@ function renderProposals() {
                     </div>
                     <div style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.3rem">Choix: ${p.choices.join(', ')}</div>
                     ${note}
+                </dfunction renderDashboard() {
+    const isLeaderboard = state.dashTab === 'leaderboard';
+
+    // ─── ONGLETS ───────────────────────────────────────────────────
+    const tabBar = `
+        <div style="display:flex; gap:0; margin-bottom:2rem; border-bottom:2px solid var(--border-color);">
+            <button
+                onclick="app.switchTab('markets')"
+                style="padding:0.6rem 1.4rem; font-weight:700; font-size:0.95rem; border:none;
+                       background:none; cursor:pointer; transition:all 0.2s;
+                       color:${!isLeaderboard ? 'var(--accent-color)' : 'var(--text-secondary)'};
+                       border-bottom:${!isLeaderboard ? '3px solid var(--accent-color)' : '3px solid transparent'};
+                       margin-bottom:-2px;">
+                <i class="fa-solid fa-fire"></i> Paris
+            </button>
+            <button
+                onclick="app.switchTab('leaderboard')"
+                style="padding:0.6rem 1.4rem; font-weight:700; font-size:0.95rem; border:none;
+                       background:none; cursor:pointer; transition:all 0.2s;
+                       color:${isLeaderboard ? 'var(--accent-color)' : 'var(--text-secondary)'};
+                       border-bottom:${isLeaderboard ? '3px solid var(--accent-color)' : '3px solid transparent'};
+                       margin-bottom:-2px;">
+                <i class="fa-solid fa-trophy"></i> Classement
+            </button>
+        </div>
+    `;
+
+    // ─── ONGLET CLASSEMENT ─────────────────────────────────────────
+    if (isLeaderboard) {
+        let lb = state.leaderboard;
+        if (!state.useApi || lb.length === 0) {
+            lb = Object.values(state.data.users)
+                .filter(u => u.status === 'active')
+                .sort((a,b) => b.points - a.points)
+                .slice(0, 20)
+                .map(u => ({ id: u.id, name: u.name, points: Math.floor(u.points) }));
+        }
+
+        // Rang de l'utilisateur courant (peut ne pas être dans le top 20)
+        let myRankHtml = '';
+        if (state.currentUser) {
+            const myRankIdx = lb.findIndex(u => u.id === state.currentUser.id);
+            if (myRankIdx === -1) {
+                // L'utilisateur n'est pas dans le top 20 : calculer son rang réel
+                const allSorted = Object.values(state.data.users)
+                    .filter(u => u.status === 'active')
+                    .sort((a,b) => b.points - a.points);
+                const realRank = allSorted.findIndex(u => u.id === state.currentUser.id) + 1;
+                if (realRank > 0) {
+                    myRankHtml = `
+                        <div style="margin-top:1rem; padding-top:1rem; border-top:2px dashed var(--border-color);">
+                            <div class="leaderboard-row me">
+                                <span class="leaderboard-rank" style="width:2rem;">#${realRank}</span>
+                                <span class="leaderboard-name">${state.currentUser.name} <span style="font-size:0.75rem;opacity:0.7">(moi)</span></span>
+                                <span class="leaderboard-pts">${Math.floor(state.currentUser.points)} pts</span>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        const medals = ['🥇','🥈','🥉'];
+        const rows = lb.map((u, i) => {
+            const isMe = state.currentUser && u.id === state.currentUser.id;
+            const rank = i < 3 ? medals[i] : `#${i+1}`;
+            const rankClass = i < 3 ? ['top1','top2','top3'][i] : '';
+            return `
+                <div class="leaderboard-row ${isMe ? 'me' : ''}">
+                    <span class="leaderboard-rank ${rankClass}" style="width:2.5rem; font-size:${i<3?'1.1rem':'0.85rem'}">${rank}</span>
+                    <span class="leaderboard-name">${u.name}${isMe ? ' <span style="font-size:0.75rem;opacity:0.7">(moi)</span>' : ''}</span>
+                    <span class="leaderboard-pts">${u.points} pts</span>
                 </div>
             `;
-        });
-    }
-    html += `</div></div></div>`;
-    return html;
-}
+        }).join('');
 
-function renderDashboard() {
-    // Tri : plus récents en premier
+        // Bonus quotidien
+        const today = new Date().toISOString().slice(0, 10);
+        const canClaim = state.currentUser && (state.currentUser.lastClaim || '') !== today;
+        const claimSection = state.currentUser ? `
+            <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--border-color);">
+                <button class="daily-claim-btn" ${canClaim ? '' : 'disabled'} onclick="app.claimDaily()">
+                    <i class="fa-solid fa-gift"></i>
+                    ${canClaim ? 'Récupérer mes +5 pts du jour' : 'Bonus déjà récupéré aujourd’hui ✔'}
+                </button>
+            </div>
+        ` : '';
+
+        const leaderboardContent = `
+            <div style="max-width:640px; margin:0 auto;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+                    <h2 style="font-size:1.3rem; font-weight:700; color:var(--text-primary);">
+                        <i class="fa-solid fa-trophy" style="color:#fbbf24;"></i> Top 20
+                    </h2>
+                    <span style="font-size:0.8rem; color:var(--text-secondary);">Points totaux</span>
+                </div>
+                <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius-lg); overflow:hidden; padding:0.5rem;">
+                    ${lb.length === 0
+                        ? '<p style="padding:1rem;color:var(--text-secondary);">Aucun joueur pour le moment.</p>'
+                        : rows}
+                    ${myRankHtml}
+                </div>
+                ${claimSection}
+            </div>
+        `;
+
+        return `<div>${tabBar}${leaderboardContent}</div>`;
+    }
+
+    // ─── ONGLET PARIS ──────────────────────────────────────────────
     const allMarkets = [...state.data.markets].reverse();
     const openMarkets = allMarkets.filter(m => m.status !== 'resolved');
     const closedMarkets = allMarkets.filter(m => m.status === 'resolved');
 
-    // IDs des marchés où l'utilisateur a des paris actifs
     const myBetMarketIds = new Set();
     if (state.currentUser) {
         state.data.markets.forEach(m => {
-            if (m.bets.some(b => b.userId === state.currentUser.id)) {
+            if (m.bets.some(b => b.userId === state.currentUser.id))
                 myBetMarketIds.add(m.id);
-            }
         });
     }
 
@@ -1010,8 +1114,20 @@ function renderDashboard() {
                 </div>
             `;
         });
+        // Badge "Ma mise" injecté directement dans le HTML
+        const myBetBadge = hasMyBet
+            ? `<span style="display:inline-block; font-size:0.7rem; font-weight:700;
+                           padding:0.15rem 0.45rem; border-radius:20px;
+                           background:var(--accent-color); color:white;
+                           margin-left:0.5rem; vertical-align:middle;">
+                   💰 Ma mise
+               </span>`
+            : '';
+        const cardStyle = hasMyBet
+            ? `border:2px solid var(--accent-color); box-shadow:0 0 0 3px var(--accent-transparent);`
+            : '';
         return `
-            <div class="market-card ${hasMyBet ? 'market-card-active' : ''}" onclick="app.navigate('market', '${m.id}')">
+            <div class="market-card" style="${cardStyle}" onclick="app.navigate('market', '${m.id}')">
                <div class="market-card-header">
                     <div class="market-icon"><img src="${m.image}" alt=""></div>
                     <div style="display:flex; flex-direction:column; align-items:flex-end;">
@@ -1020,71 +1136,17 @@ function renderDashboard() {
                         <span class="market-volume"><i class="fa-solid fa-chart-simple"></i> Vol: ${m.volume} pts</span>
                     </div>
                 </div>
-                <h3 class="market-title">${m.title}</h3>
+                <h3 class="market-title">${m.title}${myBetBadge}</h3>
                 <div style="margin-top:0.5rem">${probsHtml}</div>
             </div>
         `;
     }
 
-    // --- Classement sidebar ---
-    function renderLeaderboard() {
-        let lb = state.leaderboard;
-        // Mode local : construire depuis les users
-        if (!state.useApi || lb.length === 0) {
-            lb = Object.values(state.data.users)
-                .filter(u => u.status === 'active')
-                .sort((a,b) => b.points - a.points)
-                .slice(0, 10)
-                .map(u => ({ id: u.id, name: u.name, points: Math.floor(u.points) }));
-        }
-        const rankIcons = ['🥇','🥈','🥉'];
-        const rankClasses = ['top1','top2','top3'];
-        let rows = lb.map((u, i) => {
-            const isMe = state.currentUser && u.id === state.currentUser.id;
-            const rankDisplay = i < 3 ? rankIcons[i] : (i + 1);
-            const rankClass = i < 3 ? rankClasses[i] : '';
-            return `
-                <div class="leaderboard-row ${isMe ? 'me' : ''}">
-                    <span class="leaderboard-rank ${rankClass}">${rankDisplay}</span>
-                    <span class="leaderboard-name">${u.name}${isMe ? ' <span style="font-size:0.7rem;opacity:0.7">(moi)</span>' : ''}</span>
-                    <span class="leaderboard-pts">${u.points} pts</span>
-                </div>
-            `;
-        }).join('');
+    const modeIndicator = state.useApi
+        ? '<div style="margin-bottom:1rem; font-size:0.8rem; color:var(--yes-color)"><i class="fa-solid fa-server"></i> Connecté au serveur</div>'
+        : '<div style="margin-bottom:1rem; font-size:0.8rem; color:#ff9800"><i class="fa-solid fa-database"></i> Mode local</div>';
 
-        // Bonus quotidien
-        const today = new Date().toISOString().slice(0, 10);
-        const lastClaim = state.currentUser?.lastClaim || '';
-        const canClaim = state.currentUser && lastClaim !== today;
-        const claimBtn = state.currentUser ? `
-            <button class="daily-claim-btn" ${canClaim ? '' : 'disabled'} onclick="app.claimDaily()">
-                <i class="fa-solid fa-gift"></i>
-                ${canClaim ? 'Récupérer +5 pts' : 'Bonus déjà récupéré aujourd’hui'}
-            </button>
-        ` : '';
-
-        return `
-            <aside class="leaderboard-card">
-                <div class="leaderboard-title">
-                    <i class="fa-solid fa-trophy" style="color:#fbbf24"></i> Classement
-                </div>
-                ${lb.length === 0 ? '<p style="color:var(--text-secondary);font-size:0.85rem;">Aucun joueur pour le moment.</p>' : rows}
-                ${claimBtn}
-            </aside>
-        `;
-    }
-
-    // --- Contenu principal (paris) ---
-    let marketsHtml = `
-        <div>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
-                <h1 class="page-title" style="margin-bottom:0;">Paris</h1>
-            </div>
-            ${state.useApi
-                ? '<div style="margin-bottom:1rem; font-size:0.8rem; color:var(--yes-color)"><i class="fa-solid fa-server"></i> Connecté au serveur</div>'
-                : '<div style="margin-bottom:1rem; font-size:0.8rem; color:#ff9800"><i class="fa-solid fa-database"></i> Mode local hors-ligne</div>'}
-    `;
-
+    let marketsHtml = modeIndicator;
     marketsHtml += `<h2 style="font-size:1.1rem; font-weight:700; margin-bottom:1rem; color:var(--text-primary);"><i class="fa-solid fa-fire" style="color:var(--accent-color);"></i> Paris en cours</h2>`;
     if (openMarkets.length === 0) {
         marketsHtml += `<p style="color:var(--text-secondary); margin-bottom:2rem;">Aucun pari en cours pour le moment.</p>`;
@@ -1093,7 +1155,6 @@ function renderDashboard() {
         openMarkets.forEach(m => { marketsHtml += renderMarketCard(m); });
         marketsHtml += `</div>`;
     }
-
     if (closedMarkets.length > 0) {
         marketsHtml += `<h2 style="font-size:1rem; font-weight:700; margin-top:2.5rem; margin-bottom:1rem; color:var(--text-secondary);"><i class="fa-solid fa-flag-checkered"></i> Paris clôturés</h2>`;
         marketsHtml += `<div class="market-grid">`;
@@ -1101,9 +1162,7 @@ function renderDashboard() {
         marketsHtml += `</div>`;
     }
 
-    marketsHtml += `</div>`;
-
-    return `<div class="dashboard-layout">${marketsHtml}${renderLeaderboard()}</div>`;
+    return `<div>${tabBar}${marketsHtml}</div>`;
 }
 
 function renderMarket(id) {
