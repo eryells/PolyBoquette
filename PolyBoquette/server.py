@@ -316,7 +316,7 @@ def auth_change_password():
 def get_leaderboard():
     db = load_db()
     active = [u for u in db["users"].values() if u.get("status") == "active"]
-    ranked = sorted(active, key=lambda u: u.get("points", 0), reverse=True)[:10]
+    ranked = sorted(active, key=lambda u: u.get("points", 0), reverse=True)[:20]
     return jsonify([{"id": u["id"], "name": u["name"], "points": int(u["points"])} for u in ranked])
 
 
