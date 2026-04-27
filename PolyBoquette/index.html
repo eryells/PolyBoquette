@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PolyBoquette - Marchés Prédictifs</title>
+    
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="./css/style.css">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <a href="#" class="brand" onclick="app.navigate('dashboard')">
+            <i class="fa-solid fa-chart-line"></i>
+            PolyBoquette
+        </a>
+        
+        <div class="nav-actions">
+            <button class="btn-icon" id="themeToggle" onclick="app.toggleTheme()" title="Changer le thème">
+                <i class="fa-regular fa-moon"></i>
+            </button>
+            
+            <div class="user-pill hidden" id="userPill">
+                <i class="fa-solid fa-circle-user" style="color: var(--text-secondary)"></i>
+                <span id="userName">Invité</span>
+                <span class="points" id="userPoints">
+                     <i class="fa-solid fa-coins"></i> 0
+                </span>
+            </div>
+            
+            <div id="authActions">
+                <button class="btn-outline" onclick="app.navigate('login')">Connexion</button>
+                <button class="btn-primary" onclick="app.navigate('register')">S'inscrire</button>
+            </div>
+            <button class="btn-outline hidden" id="logoutBtn" onclick="app.logout()">
+                <i class="fa-solid fa-right-from-bracket"></i>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <main class="container" id="app-container">
+        <!-- Vues gérées par JS -->
+    </main>
+
+    <!-- Global UI Layers -->
+    <div id="toast-container" class="toast-container"></div>
+    <div id="modal-container"></div>
+
+    <!-- Application Script -->
+    <script src="./js/app.js" defer></script>
+</body>
+</html>
