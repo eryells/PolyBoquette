@@ -474,28 +474,53 @@ const app = {
 
     grantPoints: (userId) => {
         ui.showModal(
-            "<i class='fa-solid fa-coins'></i> Assigner des points",
+            "<i class='fa-solid fa-coins'></i> Modifier les points",
             `
+            <p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:1rem;">Entrez un montant positif pour créditer, ou négatif pour débiter (le solde ne peut pas passer sous 0).</p>
             <label style="display:block; margin-bottom:0.5rem; font-weight:500;">Montant de points :</label>
-            <input type="number" id="modalGrantPoints" style="width:100%; padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary);" placeholder="ex: 1000">
+            <input type="number" id="modalGrantPoints" style="width:100%; padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary);" placeholder="ex: 500 ou -200">
             `,
             async () => {
                 const amount = parseInt(document.getElementById('modalGrantPoints').value);
-                if (isNaN(amount) || amount <= 0) return ui.showToast("Montant invalide", "error");
+                if (isNaN(amount) || amount === 0) return ui.showToast("Montant invalide", "error");
                 
                 if(state.useApi) {
                     await apiCall('POST', `/api/admin/users/${userId}/grant`, {amount});
                 } else {
-                    state.data.users[userId].points += amount;
-                    if(userId === state.currentUser.id) state.currentUser.points += amount;
+                    const user = state.data.users[userId];
+                    user.points = Math.max(0, user.points + amount);
+                    addLocalTx(user, amount > 0 ? `Crédit admin : +${amount} pts` : `Débit admin : ${amount} pts`, amount);
+                    if(userId === state.currentUser.id) state.currentUser.points = user.points;
                     saveDataLocal();
                 }
                 updateNavbar();
                 ui.closeModal(true);
                 app.navigate('admin');
-                ui.showToast(amount + " points accordés.");
+                ui.showToast((amount > 0 ? '+' : '') + amount + " points appliqués.");
             },
-            "Accorder"
+            "Appliquer"
+        );
+    },
+
+    viewUserHistory: async (userId, userName) => {
+        let txs = [];
+        if (state.useApi) {
+            try {
+                txs = await apiCall('GET', `/api/users/${userId}/transactions`);
+            } catch(e) {
+                return ui.showToast(e.message, 'error');
+            }
+        } else {
+            txs = state.data.users[userId]?.transactions || [];
+        }
+        const rows = txs.length === 0
+            ? '<p style="color:var(--text-secondary);text-align:center;">Aucune transaction.</p>'
+            : txs.map(tx => formatTxRow(tx)).join('');
+        ui.showModal(
+            `<i class='fa-solid fa-clock-rotate-left'></i> Historique de ${userName}`,
+            `<div style="max-height:400px; overflow-y:auto;">${rows}</div>`,
+            () => {},
+            "Fermer"
         );
     },
 
@@ -920,18 +945,14 @@ function renderProposals() {
 }
 
 function renderDashboard() {
-    let html = `
-        <div style="display: flex; justify-content: space-between; align-items: center">
-            <h1 class="page-title">Marchés Tendances</h1>
-        </div>
-        ${state.useApi ? '<div style="margin-bottom:1rem; font-size:0.8rem; color:var(--yes-color)"><i class="fa-solid fa-server"></i> Connecté au serveur en direct</div>' : '<div style="margin-bottom:1rem; font-size:0.8rem; color:#ff9800"><i class="fa-solid fa-database"></i> Mode Local hors-ligne</div>'}
-        <div class="market-grid">
-    `;
+    // Tri : plus récents en premier (par ID décroissant, ou par ordre inversé d'ajout)
+    const allMarkets = [...state.data.markets].reverse();
+    const openMarkets = allMarkets.filter(m => m.status !== 'resolved');
+    const closedMarkets = allMarkets.filter(m => m.status === 'resolved');
 
-    state.data.markets.forEach(m => {
+    function renderMarketCard(m) {
         const probs = getProbabilities(m);
         const sortedOpts = [...m.options].sort((a,b) => probs[b.id] - probs[a.id]);
-        
         let probsHtml = '';
         sortedOpts.slice(0, 3).forEach(opt => {
             probsHtml += `
@@ -941,8 +962,7 @@ function renderDashboard() {
                 </div>
             `;
         });
-
-        html += `
+        return `
             <div class="market-card" onclick="app.navigate('market', '${m.id}')">
                <div class="market-card-header">
                     <div class="market-icon"><img src="${m.image}" alt=""></div>
@@ -958,9 +978,33 @@ function renderDashboard() {
                 </div>
             </div>
         `;
-    });
+    }
 
-    html += `</div>`;
+    let html = `
+        <div style="display: flex; justify-content: space-between; align-items: center">
+            <h1 class="page-title">Paris</h1>
+        </div>
+        ${state.useApi ? '<div style="margin-bottom:1rem; font-size:0.8rem; color:var(--yes-color)"><i class="fa-solid fa-server"></i> Connecté au serveur en direct</div>' : '<div style="margin-bottom:1rem; font-size:0.8rem; color:#ff9800"><i class="fa-solid fa-database"></i> Mode Local hors-ligne</div>'}
+    `;
+
+    // --- Paris en cours ---
+    html += `<h2 style="font-size:1.2rem; font-weight:700; margin-bottom:1rem; color:var(--text-primary);"><i class="fa-solid fa-fire" style="color:var(--accent-color);"></i> Paris en cours</h2>`;
+    if (openMarkets.length === 0) {
+        html += `<p style="color:var(--text-secondary); margin-bottom:2rem;">Aucun pari en cours pour le moment.</p>`;
+    } else {
+        html += `<div class="market-grid">`;
+        openMarkets.forEach(m => { html += renderMarketCard(m); });
+        html += `</div>`;
+    }
+
+    // --- Paris clôturés ---
+    if (closedMarkets.length > 0) {
+        html += `<h2 style="font-size:1.1rem; font-weight:700; margin-top:2.5rem; margin-bottom:1rem; color:var(--text-secondary);"><i class="fa-solid fa-flag-checkered"></i> Paris clôturés</h2>`;
+        html += `<div class="market-grid">`;
+        closedMarkets.forEach(m => { html += renderMarketCard(m); });
+        html += `</div>`;
+    }
+
     return html;
 }
 
@@ -1121,7 +1165,8 @@ function renderAdmin() {
                         <br><span style="font-size: 0.8rem; color: var(--text-secondary)">${details}</span>
                     </div>
                     <div style="display:flex; gap:0.5rem; flex-wrap:wrap; justify-content:flex-end;">
-                        <button class="btn-outline" onclick="app.grantPoints('${u.id}')"><i class="fa-solid fa-plus"></i> Points</button>
+                        <button class="btn-outline" onclick="app.grantPoints('${u.id}')"><i class="fa-solid fa-coins"></i> Points</button>
+                        <button class="btn-outline" onclick="app.viewUserHistory('${u.id}', '${u.name}')"><i class="fa-solid fa-clock-rotate-left"></i></button>
                         ${state.currentUser.id === 'admin' && u.id !== 'admin' ? 
                             `<button class="btn-outline" onclick="app.toggleAdmin('${u.id}')"><i class="fa-solid fa-star"></i> ${u.role === 'admin' ? 'Retirer Admin' : 'Nommer Admin'}</button>` 
                             : ''}
