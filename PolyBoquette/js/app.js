@@ -577,7 +577,7 @@ const app = {
             p.status = 'approved';
             
             const options = p.choices.map((c, i) => ({
-                id: 'o' + (i+1), label: c, shares: 100, color: PALETTE[i % PALETTE.length]
+                id: 'o' + (i+1), label: c, shares: 0, color: PALETTE[i % PALETTE.length]
             }));
             const initialProbs = {};
             options.forEach(o => initialProbs[o.id] = Math.round(100/p.choices.length));
