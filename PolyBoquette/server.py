@@ -310,6 +310,34 @@ def auth_change_password():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# CLASSEMENT & BONUS QUOTIDIEN
+# ──────────────────────────────────────────────────────────────────────────────
+@app.route("/api/leaderboard")
+def get_leaderboard():
+    db = load_db()
+    active = [u for u in db["users"].values() if u.get("status") == "active"]
+    ranked = sorted(active, key=lambda u: u.get("points", 0), reverse=True)[:10]
+    return jsonify([{"id": u["id"], "name": u["name"], "points": int(u["points"])} for u in ranked])
+
+
+@app.route("/api/auth/daily-claim", methods=["POST"])
+@login_required
+def daily_claim():
+    db = load_db()
+    user = db["users"].get(session["user_id"])
+    if not user:
+        return jsonify({"error": "Utilisateur introuvable"}), 404
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if user.get("lastClaim") == today:
+        return jsonify({"error": "Bonus déjà récupéré aujourd'hui"}), 400
+    user["lastClaim"] = today
+    user["points"] += 5
+    add_tx(user, "Bonus quotidien", 5)
+    save_db(db)
+    return jsonify({"ok": True, "user": safe_user(user)})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # MARCHÉS
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/api/markets")
