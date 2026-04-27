@@ -433,7 +433,7 @@ const app = {
         if (state.useApi) {
             try {
                 await apiCall('POST', '/api/proposals', { title, choices, image: imgIn });
-                ui.showToast("Proposition envoyée au BDE !");
+                ui.showToast("Proposition envoyée !");
                 app.navigate('proposals');
             } catch(e) {
                 ui.showToast(e.message, 'error');
@@ -452,7 +452,7 @@ const app = {
             };
             state.data.proposals.push(p);
             saveDataLocal();
-            ui.showToast("Proposition envoyée au BDE !");
+            ui.showToast("Proposition envoyée !");
             app.navigate('proposals');
         }
     },
@@ -722,7 +722,7 @@ function renderProposals() {
         <h1 class="page-title"><i class="fa-solid fa-lightbulb"></i> Proposer un Pari</h1>
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
             <div class="trade-section" style="height: fit-content;">
-                <h2>Soumettre une idée au BDE</h2>
+                <h2>Soumettre une idée</h2>
                 <div class="trade-input-group">
                     <label>Question du pari</label>
                     <input type="text" id="propTitle" style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:1rem;" placeholder="Ex: Qui gagnera l'élection ?">
@@ -840,10 +840,10 @@ function renderMarket(id) {
     
     if (isResolved) {
         tradeInterfaceHtml = m.resolvedWinner === 'cancelled' 
-            ? `<div style="padding: 1.5rem; background: var(--bg-secondary); border-radius: var(--radius-md); text-align: center; font-weight: bold; color: var(--text-secondary);">Ce pari a été annulé par le BDE et toutes les mises ont été remboursées à leurs propriétaires.</div>`
+            ? `<div style="padding: 1.5rem; background: var(--bg-secondary); border-radius: var(--radius-md); text-align: center; font-weight: bold; color: var(--text-secondary);">Ce pari a été annulé et toutes les mises ont été remboursées à leurs propriétaires.</div>`
             : `<div style="padding: 1.5rem; background: ${m.options.find(o=>o.id === m.resolvedWinner)?.color || 'var(--yes-color)'}; border-radius: var(--radius-md); text-align: center; font-weight: bold; color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.5);">Pari clôturé !<br><br>Gagnant : ${m.options.find(o=>o.id === m.resolvedWinner)?.label}</div>`;
     } else if (isPaused) {
-        tradeInterfaceHtml = `<div style="padding: 1.5rem; background: var(--accent-transparent); border-radius: var(--radius-md); text-align: center; font-weight: bold; color: var(--accent-color); border: 1px solid var(--accent-color);">Le BDE a suspendu ce pari temporairement. Les transactions et retraits sont gelés.</div>`;
+        tradeInterfaceHtml = `<div style="padding: 1.5rem; background: var(--accent-transparent); border-radius: var(--radius-md); text-align: center; font-weight: bold; color: var(--accent-color); border: 1px solid var(--accent-color);">Ce pari est suspendu temporairement. Les transactions et retraits sont gelés.</div>`;
     } else {
         tradeInterfaceHtml = `
                 <div class="trade-input-group">
