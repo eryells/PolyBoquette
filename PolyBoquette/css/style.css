@@ -206,9 +206,143 @@ button:active {
 /* Market Grid */
 .market-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 1.5rem;
 }
+
+/* Dashboard 2-column layout */
+.dashboard-layout {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 2rem;
+  align-items: start;
+}
+
+/* Market card with active bet highlight */
+.market-card-active {
+  border-color: var(--accent-color) !important;
+  box-shadow: 0 0 0 2px var(--accent-transparent), var(--glass-shadow);
+  background: var(--bg-card);
+  position: relative;
+}
+
+.market-card-active::before {
+  content: '\01F4B0';
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+
+/* Leaderboard sidebar */
+.leaderboard-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  position: sticky;
+  top: calc(64px + 1rem);
+}
+
+.leaderboard-title {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-primary);
+}
+
+.leaderboard-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.88rem;
+  transition: background 0.15s;
+}
+
+.leaderboard-row:hover {
+  background: var(--bg-secondary);
+}
+
+.leaderboard-row.me {
+  background: var(--accent-transparent);
+  font-weight: 700;
+}
+
+.leaderboard-rank {
+  width: 1.4rem;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.leaderboard-rank.top1 { color: #fbbf24; }
+.leaderboard-rank.top2 { color: #94a3b8; }
+.leaderboard-rank.top3 { color: #cd7c3e; }
+
+.leaderboard-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.leaderboard-pts {
+  font-weight: 700;
+  color: var(--accent-color);
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+/* Daily bonus button */
+.daily-claim-btn {
+  width: 100%;
+  margin-top: 1rem;
+  padding: 0.6rem;
+  border-radius: var(--radius-md);
+  font-size: 0.88rem;
+  font-weight: 600;
+  background: linear-gradient(135deg, var(--accent-color), var(--accent-light));
+  color: white;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.daily-claim-btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.daily-claim-btn:disabled {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: default;
+  transform: none;
+  filter: none;
+}
+
+@media (max-width: 900px) {
+  .dashboard-layout {
+    grid-template-columns: 1fr;
+  }
+  .leaderboard-card {
+    position: static;
+    order: -1;
+  }
+}
+
 
 /* Market Card */
 .market-card {
