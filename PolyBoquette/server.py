@@ -558,11 +558,14 @@ def admin_grant_points(user_id):
     db = load_db()
     if user_id not in db["users"]:
         return jsonify({"error": "Introuvable"}), 404
-    if not isinstance(amount, int) or amount <= 0:
-        return jsonify({"error": "Montant invalide"}), 400
-    db["users"][user_id]["points"] += amount
+    if not isinstance(amount, int) or amount == 0:
+        return jsonify({"error": "Montant invalide (ne peut pas être zéro)"}), 400
+    user = db["users"][user_id]
+    user["points"] = max(0, user["points"] + amount)
+    desc = f"Crédit admin : +{amount} pts" if amount > 0 else f"Débit admin : {amount} pts"
+    add_tx(user, desc, amount)
     save_db(db)
-    return jsonify({"ok": True, "points": db["users"][user_id]["points"]})
+    return jsonify({"ok": True, "points": user["points"]})
 
 
 @app.route("/api/admin/users/<user_id>", methods=["DELETE"])
