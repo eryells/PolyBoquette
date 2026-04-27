@@ -461,6 +461,105 @@ button:active {
   .detail-layout {
     grid-template-columns: 1fr;
   }
+  .navbar {
+    padding: 0.75rem 1rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .brand {
+    font-size: 1.2rem;
+  }
+  .nav-actions {
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .user-pill {
+    font-size: 0.8rem;
+    padding: 0.2rem 0.5rem;
+    gap: 0.4rem;
+  }
+  .btn-primary, .btn-outline {
+    padding: 0.4rem 0.7rem;
+    font-size: 0.85rem;
+  }
+  .btn-icon {
+    width: 34px;
+    height: 34px;
+  }
+  .container {
+    padding: 1rem;
+  }
+  .page-title {
+    font-size: 1.4rem;
+  }
+  .market-grid {
+    grid-template-columns: 1fr;
+  }
+  .chart-section {
+    min-height: 280px;
+  }
+  .admin-card {
+    padding: 1rem;
+  }
+  .user-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .user-row > div:last-child {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .modal-content {
+    padding: 1.25rem;
+    width: 95%;
+  }
+  .toast-container {
+    bottom: 1rem;
+    right: 1rem;
+    left: 1rem;
+  }
+  .toast {
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .brand span {
+    display: none;
+  }
+  .detail-layout {
+    gap: 1rem;
+  }
+  .market-card {
+    padding: 1rem;
+  }
+  .chart-section {
+    min-height: 220px;
+    padding: 1rem;
+  }
+  .trade-section {
+    padding: 1rem;
+  }
+}
+
+/* Chart toggle */
+.chart-toggle-btn {
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chart-toggle-btn:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
 }
 
 /* Toasts */
