@@ -468,7 +468,7 @@ def approve_proposal(proposal_id):
     # Créer le marché depuis la proposition
     choices = p["choices"]
     options = [
-        {"id": f"o{i+1}", "label": c, "shares": 100, "color": PALETTE[i % len(PALETTE)]}
+        {"id": f"o{i+1}", "label": c, "shares": 0, "color": PALETTE[i % len(PALETTE)]}
         for i, c in enumerate(choices)
     ]
     init_probs = {o["id"]: round(100 / len(options)) for o in options}
