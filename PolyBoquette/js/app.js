@@ -840,7 +840,9 @@ const app = {
 
     switchTab: (tab) => {
         state.dashTab = tab;
-        render();
+        // Mise à jour directe du container sans recharger les données serveur
+        const container = document.getElementById('mainContent');
+        if (container) container.innerHTML = renderDashboard();
     }
 };
 
