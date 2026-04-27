@@ -134,6 +134,9 @@ function initLocalData() {
         if (saved) {
             const parsed = JSON.parse(saved);
             if (!parsed.proposals) parsed.proposals = []; // migration v5
+            Object.values(parsed.users).forEach(u => {
+                if(!u.transactions) u.transactions = [];
+            });
             state.data = parsed;
         } else {
             saveDataLocal();
@@ -151,6 +154,16 @@ function saveDataLocal() {
     if(!state.useApi) {
         localStorage.setItem('polyboquette_data', JSON.stringify(state.data));
     }
+}
+
+function addLocalTx(user, desc, amount) {
+    if(!user.transactions) user.transactions = [];
+    user.transactions.unshift({
+        time: new Date().toISOString(),
+        desc: desc,
+        amount: amount
+    });
+    if(user.transactions.length > 50) user.transactions.pop();
 }
 
 async function refreshServerData() {
@@ -231,6 +244,7 @@ const app = {
         else if (view === 'login') container.innerHTML = renderLogin();
         else if (view === 'register') container.innerHTML = renderRegister();
         else if (view === 'proposals') container.innerHTML = renderProposals();
+        else if (view === 'profile') container.innerHTML = renderProfile();
     },
 
     selectOption: (optId) => {
@@ -300,6 +314,8 @@ const app = {
             const historyEntry = { time: timeStr };
             Object.keys(probs).forEach(k => { historyEntry[k] = probs[k] });
             market.history.push(historyEntry);
+            
+            addLocalTx(state.currentUser, `Mise dans '${market.title}'`, -amount);
             saveDataLocal();
             ui.showToast("Mise effectuée avec succès !");
         }
@@ -343,6 +359,7 @@ const app = {
             market.history.push(historyEntry);
             market.bets.splice(betIndex, 1);
             
+            addLocalTx(state.currentUser, `Revente dans '${market.title}'`, refund);
             saveDataLocal();
             ui.showToast(`Vous avez retiré votre liquidité (${refund} points).`);
         }
@@ -631,21 +648,33 @@ const app = {
 
             if (winnerId === 'cancelled') {
                 market.bets.forEach(b => {
-                    if (state.data.users[b.userId]) state.data.users[b.userId].points += b.amount;
+                    if (state.data.users[b.userId]) {
+                        state.data.users[b.userId].points += b.amount;
+                        addLocalTx(state.data.users[b.userId], `Remboursement annulation '${market.title}'`, b.amount);
+                    }
                 });
             } else {
-                const totalPool = market.volume;
-                const realWinningPool = market.bets.filter(b => b.optId === winnerId).reduce((sum, b) => sum + b.amount, 0);
-                
+                // Pari Mutuel pur sur les VRAIES mises uniquement
+                const realTotalPool = market.bets.reduce((s, b) => s + b.amount, 0);
+                const realWinningPool = market.bets.filter(b => b.optId === winnerId).reduce((s, b) => s + b.amount, 0);
+
                 if (realWinningPool === 0) {
                     market.bets.forEach(b => {
-                        if (state.data.users[b.userId]) state.data.users[b.userId].points += b.amount;
+                        if (state.data.users[b.userId]) {
+                            state.data.users[b.userId].points += b.amount;
+                            addLocalTx(state.data.users[b.userId], `Remboursement (aucun gagnant) '${market.title}'`, b.amount);
+                        }
                     });
                 } else {
                     market.bets.forEach(b => {
-                        if (b.optId === winnerId && state.data.users[b.userId]) {
-                            const sharePercent = b.amount / realWinningPool;
-                            state.data.users[b.userId].points += Math.floor(sharePercent * totalPool);
+                        if (state.data.users[b.userId]) {
+                            if (b.optId === winnerId) {
+                                const payout = Math.max(0, Math.floor((b.amount / realWinningPool) * realTotalPool));
+                                state.data.users[b.userId].points += payout;
+                                addLocalTx(state.data.users[b.userId], `Gain '${market.title}'`, payout);
+                            } else {
+                                addLocalTx(state.data.users[b.userId], `Pari perdu '${market.title}'`, 0);
+                            }
                         }
                     });
                 }
@@ -701,6 +730,34 @@ const app = {
             ui.showToast("Marché supprimé.");
         }
         app.navigate('admin');
+    },
+
+    changePassword: async () => {
+        const oldPass = document.getElementById('oldPass')?.value;
+        const newPass = document.getElementById('newPass')?.value;
+        const newPass2 = document.getElementById('newPass2')?.value;
+
+        if (!oldPass || !newPass || !newPass2) return ui.showToast('Veuillez remplir tous les champs.', 'error');
+        if (newPass !== newPass2) return ui.showToast('Les nouveaux mots de passe ne correspondent pas.', 'error');
+        if (newPass.length < 3) return ui.showToast('Le nouveau mot de passe est trop court.', 'error');
+
+        if (state.useApi) {
+            try {
+                await apiCall('POST', '/api/auth/change-password', { oldPassword: oldPass, newPassword: newPass });
+                ui.showToast('Mot de passe chang\u00e9 avec succ\u00e8s !');
+            } catch(e) {
+                return ui.showToast(e.message, 'error');
+            }
+        } else {
+            if (state.currentUser.password !== oldPass) return ui.showToast('Ancien mot de passe incorrect.', 'error');
+            state.currentUser.password = newPass;
+            state.data.users[state.currentUser.id].password = newPass;
+            saveDataLocal();
+            ui.showToast('Mot de passe chang\u00e9 avec succ\u00e8s !');
+        }
+        document.getElementById('oldPass').value = '';
+        document.getElementById('newPass').value = '';
+        document.getElementById('newPass2').value = '';
     }
 };
 
@@ -734,6 +791,9 @@ function updateNavbar() {
         document.getElementById('userPoints').innerHTML = `<i class="fa-solid fa-coins"></i> ${Math.floor(state.currentUser.points)}`;
         
         userPill.classList.remove('hidden');
+        userPill.style.cursor = 'pointer';
+        userPill.onclick = () => app.navigate('profile');
+        
         logoutBtn.classList.remove('hidden');
         authActions.classList.add('hidden');
         
@@ -1168,6 +1228,101 @@ function initChart(marketId) {
     });
 
     app.updateGainEstimate();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE PROFIL
+// ─────────────────────────────────────────────────────────────────────────────
+function renderProfile() {
+    if (!state.currentUser) return renderLogin();
+    const u = state.currentUser;
+    const txs = (state.useApi ? [] : (u.transactions || []));
+
+    // Si on est en mode API, on charge les transactions asynchronement
+    if (state.useApi) {
+        fetch(`/api/users/${u.id}/transactions`)
+            .then(r => r.json())
+            .then(data => {
+                const list = document.getElementById('txList');
+                if (!list) return;
+                list.innerHTML = data.length === 0
+                    ? '<p style="color:var(--text-secondary);text-align:center;">Aucune transaction pour le moment.</p>'
+                    : data.map(tx => formatTxRow(tx)).join('');
+            }).catch(() => {});
+    }
+
+    const txHtml = state.useApi
+        ? '<p style="color:var(--text-secondary);text-align:center;"><i class="fa-solid fa-spinner fa-spin"></i> Chargement...</p>'
+        : (txs.length === 0
+            ? '<p style="color:var(--text-secondary);text-align:center;">Aucune transaction pour le moment.</p>'
+            : txs.map(tx => formatTxRow(tx)).join(''));
+
+    return `
+        <div style="margin-bottom: 2rem">
+            <button class="btn-outline" onclick="app.navigate('dashboard')">
+                <i class="fa-solid fa-arrow-left"></i> Retour
+            </button>
+        </div>
+
+        <h1 class="page-title"><i class="fa-solid fa-circle-user"></i> Mon Profil</h1>
+
+        <div class="admin-card">
+            <h2 class="admin-header"><i class="fa-solid fa-id-card"></i> Informations</h2>
+            <div class="user-row" style="flex-direction:column; align-items:flex-start; gap:0.4rem;">
+                <div><strong>Nom :</strong> ${u.name}</div>
+                <div><strong>Identifiant :</strong> ${u.username}</div>
+                <div><strong>Bu\u00e8que :</strong> ${u.buque || '—'}</div>
+                <div><strong>Promotion :</strong> ${u.proms || '—'}</div>
+                <div><strong>Num\u00e9ro :</strong> ${u.nums || '—'}</div>
+                <div><strong>R\u00f4le :</strong> <span style="color: ${u.role === 'admin' ? 'var(--accent-color)' : 'var(--text-secondary)'}">${u.role === 'admin' ? '⭐ Administrateur' : 'Membre'}</span></div>
+                <div style="margin-top:0.5rem; font-size:1.3rem; font-weight:700; color:var(--accent-color)">
+                    <i class="fa-solid fa-coins"></i> ${Math.floor(u.points)} points
+                </div>
+            </div>
+        </div>
+
+        <div class="admin-card">
+            <h2 class="admin-header"><i class="fa-solid fa-key"></i> Changer mon mot de passe</h2>
+            <div style="display:flex; flex-direction:column; gap:0.75rem; max-width:420px;">
+                <input id="oldPass" type="password" placeholder="Ancien mot de passe"
+                    style="padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary);">
+                <input id="newPass" type="password" placeholder="Nouveau mot de passe"
+                    style="padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary);">
+                <input id="newPass2" type="password" placeholder="Confirmer le nouveau mot de passe"
+                    style="padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary);">
+                <button class="btn-primary" onclick="app.changePassword()">
+                    <i class="fa-solid fa-floppy-disk"></i> Enregistrer
+                </button>
+            </div>
+        </div>
+
+        <div class="admin-card">
+            <h2 class="admin-header"><i class="fa-solid fa-clock-rotate-left"></i> Historique des transactions</h2>
+            <div id="txList">${txHtml}</div>
+        </div>
+    `;
+}
+
+function formatTxRow(tx) {
+    const d = new Date(tx.time);
+    const dateStr = d.toLocaleDateString('fr-FR') + ' ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    let amountHtml = '';
+    if (tx.amount > 0) {
+        amountHtml = `<span style="color:#22c55e; font-weight:700;">+${tx.amount} pts</span>`;
+    } else if (tx.amount < 0) {
+        amountHtml = `<span style="color:#ef4444; font-weight:700;">${tx.amount} pts</span>`;
+    } else {
+        amountHtml = `<span style="color:var(--text-secondary); font-weight:700;">— pts</span>`;
+    }
+    return `
+        <div class="user-row" style="flex-direction:row; justify-content:space-between; align-items:center; gap:1rem;">
+            <div>
+                <div style="font-weight:600; font-size:0.95rem;">${tx.desc}</div>
+                <div style="font-size:0.78rem; color:var(--text-secondary); margin-top:0.1rem;">${dateStr}</div>
+            </div>
+            <div>${amountHtml}</div>
+        </div>
+    `;
 }
 
 window.addEventListener('DOMContentLoaded', init);

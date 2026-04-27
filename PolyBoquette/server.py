@@ -5,18 +5,27 @@ Lance avec : python server.py
 En production : gunicorn server:app --bind 0.0.0.0:8000
 
 Architecture :
-- Toutes les données sont dans data/db.json (créé auto si absent)
+- Données persistées dans PostgreSQL si DATABASE_URL est défini (Render)
+- Fallback sur data/db.json en local (développement)
 - Sessions via cookie signé Flask
 - Routes REST : /api/...
 - Le frontend (index.html + assets) est servi directement par Flask
 """
 
 import os
+import copy
 import json
 import secrets
 from datetime import datetime, timezone
 from functools import wraps
 from flask import Flask, request, jsonify, session, send_from_directory, abort
+
+try:
+    import psycopg2
+    import psycopg2.extras
+    PSYCOPG2_AVAILABLE = True
+except ImportError:
+    PSYCOPG2_AVAILABLE = False
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CONFIG
@@ -26,7 +35,7 @@ DATA_DIR   = os.path.join(BASE_DIR, "data")
 DB_PATH    = os.path.join(DATA_DIR, "db.json")
 STATIC_DIR = BASE_DIR          # index.html est à la racine de PolyBoquette/
 
-app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="")
+app = Flask(__name__)
 
 # Clé secrète – remplace par une vraie valeur en prod (variable d'env)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
@@ -36,61 +45,103 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 PALETTE = ['#22c55e', '#ef4444', '#3b82f6', '#d946ef', '#f97316', '#eab308', '#06b6d4']
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PERSISTANCE JSON
+# PERSISTANCE : PostgreSQL (prod) ou JSON (local)
 # ──────────────────────────────────────────────────────────────────────────────
+DATABASE_URL = os.environ.get("DATABASE_URL")  # mis à dispo automatiquement par Render
+USE_PG = PSYCOPG2_AVAILABLE and bool(DATABASE_URL)
+
 DEFAULT_DB = {
     "version": 5,
     "users": {
         "admin": {
             "id": "admin", "username": "admin", "password": "admin123",
             "name": "ADMIN BDE", "role": "admin", "status": "active",
-            "points": 1000, "buque": "BDE", "nums": "1", "proms": "Me221"
+            "points": 1000, "buque": "BDE", "nums": "1", "proms": "Me221",
+            "transactions": []
         }
     },
-    "markets": [
-        {
-            "id": "m1",
-            "title": "Notre école sera-t-elle dans le top 10 L'Étudiant l'an prochain ?",
-            "image": "https://images.unsplash.com/photo-1523050854058-8df90110c9f1?auto=format&fit=crop&w=150&q=80",
-            "volume": 4500,
-            "status": "open",
-            "resolvedWinner": None,
-            "bets": [],
-            "options": [
-                {"id": "o1", "label": "Oui", "shares": 1500, "color": "#0f8b65"},
-                {"id": "o2", "label": "Non",  "shares": 700,  "color": "#d13e38"}
-            ],
-            "history": [
-                {"time": "J-6", "o1": 40, "o2": 60},
-                {"time": "J-5", "o1": 45, "o2": 55},
-                {"time": "J-4", "o1": 55, "o2": 45},
-                {"time": "J-3", "o1": 52, "o2": 48},
-                {"time": "J-2", "o1": 60, "o2": 40},
-                {"time": "J-1", "o1": 68, "o2": 32}
-            ]
-        }
-    ],
-    "proposals": []   # ← Nouvelles propositions de paris par les users
+    "markets": [],
+    "proposals": []
 }
 
 
-def load_db():
-    os.makedirs(DATA_DIR, exist_ok=True)
-    if not os.path.exists(DB_PATH):
-        save_db(DEFAULT_DB)
-        return DEFAULT_DB
-    with open(DB_PATH, "r", encoding="utf-8") as f:
-        db = json.load(f)
-    # Migration : ajout du champ proposals si absent (ancienne DB)
+
+def _get_pg_conn():
+    """Retourne une connexion PostgreSQL."""
+    return psycopg2.connect(DATABASE_URL)
+
+
+def _ensure_pg_table(conn):
+    """Crée la table si elle n'existe pas encore."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS polyboquette_db (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                data TEXT NOT NULL
+            )
+        """)
+    conn.commit()
+
+
+def _migrate(db):
+    """Applique les migrations sur une DB chargée."""
     if "proposals" not in db:
         db["proposals"] = []
+    for u in db["users"].values():
+        if "transactions" not in u:
+            u["transactions"] = []
     return db
 
 
+def load_db():
+    if USE_PG:
+        try:
+            conn = _get_pg_conn()
+            _ensure_pg_table(conn)
+            with conn.cursor() as cur:
+                cur.execute("SELECT data FROM polyboquette_db WHERE id = 1")
+                row = cur.fetchone()
+            conn.close()
+            if row:
+                return _migrate(json.loads(row[0]))
+            # Première utilisation : initialiser avec DEFAULT_DB
+            db = copy.deepcopy(DEFAULT_DB)
+            save_db(db)
+            return db
+        except Exception as e:
+            print(f"[PG] Erreur load_db: {e}")
+            return copy.deepcopy(DEFAULT_DB)
+    else:
+        # Mode local : fichier JSON
+        os.makedirs(DATA_DIR, exist_ok=True)
+        if not os.path.exists(DB_PATH):
+            db = copy.deepcopy(DEFAULT_DB)
+            save_db(db)
+            return db
+        with open(DB_PATH, "r", encoding="utf-8") as f:
+            db = json.load(f)
+        return _migrate(db)
+
+
 def save_db(db):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(DB_PATH, "w", encoding="utf-8") as f:
-        json.dump(db, f, ensure_ascii=False, indent=2)
+    if USE_PG:
+        try:
+            conn = _get_pg_conn()
+            _ensure_pg_table(conn)
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO polyboquette_db (id, data)
+                    VALUES (1, %s)
+                    ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data
+                """, (json.dumps(db, ensure_ascii=False),))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[PG] Erreur save_db: {e}")
+    else:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(DB_PATH, "w", encoding="utf-8") as f:
+            json.dump(db, f, ensure_ascii=False, indent=2)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -143,6 +194,18 @@ def safe_user(user):
     u = dict(user)
     u.pop("password", None)
     return u
+
+
+def add_tx(user, desc, amount):
+    if "transactions" not in user:
+        user["transactions"] = []
+    user["transactions"].insert(0, {
+        "time": datetime.now(timezone.utc).isoformat(),
+        "desc": desc,
+        "amount": amount
+    })
+    # Garder seulement les 50 dernières
+    user["transactions"] = user["transactions"][:50]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -218,10 +281,30 @@ def auth_register():
         "name": name, "role": "user", "status": "pending", "points": 100,
         "buque": data.get("buque", ""),
         "nums":  data.get("nums",  ""),
-        "proms": data.get("proms", "")
+        "proms": data.get("proms", ""),
+        "transactions": []
     }
     save_db(db)
     return jsonify({"ok": True}), 201
+
+
+@app.route("/api/auth/change-password", methods=["POST"])
+@login_required
+def auth_change_password():
+    data = request.get_json()
+    old_pass = data.get("oldPassword", "").strip()
+    new_pass = data.get("newPassword", "").strip()
+    db = load_db()
+    user = db["users"].get(session["user_id"])
+    if not user:
+        return jsonify({"error": "Utilisateur introuvable"}), 404
+    if user["password"] != old_pass:
+        return jsonify({"error": "Ancien mot de passe incorrect"}), 400
+    if len(new_pass) < 3:
+        return jsonify({"error": "Le nouveau mot de passe est trop court"}), 400
+    user["password"] = new_pass
+    save_db(db)
+    return jsonify({"ok": True})
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -281,6 +364,8 @@ def place_bet(market_id):
     m["bets"].append(bet)
     hist = {"time": now_str, **probs}
     m["history"].append(hist)
+    
+    add_tx(user, f"Mise dans '{m['title']}'", -amount)
 
     save_db(db)
     return jsonify({"user": safe_user(user), "market": m})
@@ -315,6 +400,8 @@ def cashout_bet(market_id, bet_id):
     now_str = datetime.now(timezone.utc).strftime("%H:%M")
     m["history"].append({"time": now_str, **new_probs})
     m["bets"].pop(bet_idx)
+    
+    add_tx(user, f"Revente dans '{m['title']}'", refund)
 
     save_db(db)
     return jsonify({"user": safe_user(user), "market": m, "refund": refund})
@@ -534,26 +621,37 @@ def admin_resolve_market(market_id):
     m["status"] = "resolved"
     m["resolvedWinner"] = winner_id
 
+    # Pool réel = somme des VRAIES mises (hors liquidité initiale fictive)
+    real_total_pool = sum(b["amount"] for b in m["bets"])
+
     if winner_id == "cancelled":
         for b in m["bets"]:
             if b["userId"] in db["users"]:
                 db["users"][b["userId"]]["points"] += b["amount"]
+                add_tx(db["users"][b["userId"]], f"Remboursement annulation '{m['title']}'", b["amount"])
     else:
         winning_opt = next((o for o in m["options"] if o["id"] == winner_id), None)
         if winning_opt:
-            total_pool = m["volume"]
             real_winning_pool = sum(b["amount"] for b in m["bets"] if b["optId"] == winner_id)
-            
+
             if real_winning_pool == 0:
+                # Personne n'a misé sur le gagnant → remboursement intégral de tous
                 for b in m["bets"]:
                     if b["userId"] in db["users"]:
                         db["users"][b["userId"]]["points"] += b["amount"]
+                        add_tx(db["users"][b["userId"]], f"Remboursement (aucun gagnant) '{m['title']}'", b["amount"])
             else:
+                # Pari Mutuel pur sur les vraies mises :
+                # Chaque gagnant reçoit sa part proportionnelle du VRAI pool total
                 for b in m["bets"]:
-                    if b["optId"] == winner_id and b["userId"] in db["users"]:
-                        share_pct = b["amount"] / real_winning_pool
-                        payout = int(share_pct * total_pool)
-                        db["users"][b["userId"]]["points"] += payout
+                    if b["userId"] in db["users"]:
+                        if b["optId"] == winner_id:
+                            share_pct = b["amount"] / real_winning_pool
+                            payout = max(0, int(share_pct * real_total_pool))
+                            db["users"][b["userId"]]["points"] += payout
+                            add_tx(db["users"][b["userId"]], f"Gain '{m['title']}'", payout)
+                        else:
+                            add_tx(db["users"][b["userId"]], f"Pari perdu '{m['title']}'", 0)
 
     save_db(db)
     return jsonify({"ok": True})
@@ -571,6 +669,20 @@ def admin_delete_market(market_id):
     db["markets"].pop(idx)
     save_db(db)
     return jsonify({"ok": True})
+
+
+@app.route("/api/users/<user_id>/transactions")
+@login_required
+def get_user_transactions(user_id):
+    db = load_db()
+    me = db["users"].get(session["user_id"])
+    # Un user ne peut voir que son propre historique ; les admins voient tout
+    if me["id"] != user_id and me.get("role") != "admin":
+        return jsonify({"error": "Accès refusé"}), 403
+    target = db["users"].get(user_id)
+    if not target:
+        return jsonify({"error": "Utilisateur introuvable"}), 404
+    return jsonify(target.get("transactions", []))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
