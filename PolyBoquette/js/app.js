@@ -15,7 +15,9 @@ const state = {
     currentView: 'dashboard',
     currentMarketId: null,
     selectedOptionId: null,
-    chartHidden: false  // préférence utilisateur : masquer le graphe
+    chartHidden: false,    // préférence utilisateur : masquer le graphe
+    leaderboard: [],       // top 10 classement
+    canClaim: false        // bonus quotidien disponible
 };
 
 const PALETTE = ['#22c55e', '#ef4444', '#3b82f6', '#d946ef', '#f97316', '#eab308', '#06b6d4'];
@@ -154,12 +156,14 @@ function addLocalTx(user, desc, amount) {
 
 async function refreshServerData() {
     if(!state.useApi) return;
-    const [mRes, pRes] = await Promise.all([
+    const [mRes, pRes, lbRes] = await Promise.all([
         fetch('/api/markets').catch(()=>null),
-        state.currentUser ? fetch('/api/proposals').catch(()=>null) : Promise.resolve(null)
+        state.currentUser ? fetch('/api/proposals').catch(()=>null) : Promise.resolve(null),
+        fetch('/api/leaderboard').catch(()=>null)
     ]);
     if(mRes && mRes.ok) state.data.markets = await mRes.json();
     if(pRes && pRes.ok) state.data.proposals = await pRes.json();
+    if(lbRes && lbRes.ok) state.leaderboard = await lbRes.json();
     
     if(state.currentUser?.role === 'admin') {
         const uRes = await fetch('/api/admin/users').catch(()=>null);
@@ -171,6 +175,13 @@ async function refreshServerData() {
     } else if (state.currentUser) {
         state.data.users = {};
         state.data.users[state.currentUser.id] = state.currentUser;
+    }
+
+    // Vérifier si le bonus quotidien est disponible
+    if (state.currentUser) {
+        const today = new Date().toISOString().slice(0, 10);
+        const lastClaim = state.currentUser.lastClaim || '';
+        state.canClaim = lastClaim !== today;
     }
 }
 
@@ -798,6 +809,32 @@ const app = {
             ui.showToast('Compte supprimé.');
         }
         app.navigate('admin');
+    },
+
+    claimDaily: async () => {
+        if (state.useApi) {
+            try {
+                const res = await apiCall('POST', '/api/auth/daily-claim');
+                state.currentUser = res.user;
+                ui.showToast('\uD83C\uDF81 +5 points r\u00e9cup\u00e9r\u00e9s ! Revenez demain.');
+            } catch(e) {
+                return ui.showToast(e.message, 'error');
+            }
+        } else {
+            const today = new Date().toISOString().slice(0, 10);
+            if (state.currentUser.lastClaim === today) {
+                return ui.showToast('Bonus d\u00e9j\u00e0 r\u00e9cup\u00e9r\u00e9 aujourd\u2019hui !', 'error');
+            }
+            state.currentUser.lastClaim = today;
+            state.currentUser.points += 5;
+            state.data.users[state.currentUser.id].lastClaim = today;
+            state.data.users[state.currentUser.id].points += 5;
+            addLocalTx(state.currentUser, 'Bonus quotidien', 5);
+            saveDataLocal();
+            ui.showToast('\uD83C\uDF81 +5 points r\u00e9cup\u00e9r\u00e9s ! Revenez demain.');
+        }
+        updateNavbar();
+        app.navigate('dashboard');
     }
 };
 
@@ -945,25 +982,36 @@ function renderProposals() {
 }
 
 function renderDashboard() {
-    // Tri : plus récents en premier (par ID décroissant, ou par ordre inversé d'ajout)
+    // Tri : plus récents en premier
     const allMarkets = [...state.data.markets].reverse();
     const openMarkets = allMarkets.filter(m => m.status !== 'resolved');
     const closedMarkets = allMarkets.filter(m => m.status === 'resolved');
 
+    // IDs des marchés où l'utilisateur a des paris actifs
+    const myBetMarketIds = new Set();
+    if (state.currentUser) {
+        state.data.markets.forEach(m => {
+            if (m.bets.some(b => b.userId === state.currentUser.id)) {
+                myBetMarketIds.add(m.id);
+            }
+        });
+    }
+
     function renderMarketCard(m) {
+        const hasMyBet = myBetMarketIds.has(m.id);
         const probs = getProbabilities(m);
         const sortedOpts = [...m.options].sort((a,b) => probs[b.id] - probs[a.id]);
         let probsHtml = '';
         sortedOpts.slice(0, 3).forEach(opt => {
             probsHtml += `
-                <div style="display: flex; justify-content: space-between; margin-bottom: 0.2rem; font-size: 0.85rem; font-weight: 600;">
-                    <span style="color: ${opt.color}">${opt.label}</span>
-                    <span style="color: var(--text-primary)">${probs[opt.id]}%</span>
+                <div style="display:flex; justify-content:space-between; margin-bottom:0.2rem; font-size:0.85rem; font-weight:600;">
+                    <span style="color:${opt.color}">${opt.label}</span>
+                    <span style="color:var(--text-primary)">${probs[opt.id]}%</span>
                 </div>
             `;
         });
         return `
-            <div class="market-card" onclick="app.navigate('market', '${m.id}')">
+            <div class="market-card ${hasMyBet ? 'market-card-active' : ''}" onclick="app.navigate('market', '${m.id}')">
                <div class="market-card-header">
                     <div class="market-icon"><img src="${m.image}" alt=""></div>
                     <div style="display:flex; flex-direction:column; align-items:flex-end;">
@@ -973,39 +1021,89 @@ function renderDashboard() {
                     </div>
                 </div>
                 <h3 class="market-title">${m.title}</h3>
-                <div style="margin-top: 0.5rem">
-                    ${probsHtml}
-                </div>
+                <div style="margin-top:0.5rem">${probsHtml}</div>
             </div>
         `;
     }
 
-    let html = `
-        <div style="display: flex; justify-content: space-between; align-items: center">
-            <h1 class="page-title">Paris</h1>
-        </div>
-        ${state.useApi ? '<div style="margin-bottom:1rem; font-size:0.8rem; color:var(--yes-color)"><i class="fa-solid fa-server"></i> Connecté au serveur en direct</div>' : '<div style="margin-bottom:1rem; font-size:0.8rem; color:#ff9800"><i class="fa-solid fa-database"></i> Mode Local hors-ligne</div>'}
+    // --- Classement sidebar ---
+    function renderLeaderboard() {
+        let lb = state.leaderboard;
+        // Mode local : construire depuis les users
+        if (!state.useApi || lb.length === 0) {
+            lb = Object.values(state.data.users)
+                .filter(u => u.status === 'active')
+                .sort((a,b) => b.points - a.points)
+                .slice(0, 10)
+                .map(u => ({ id: u.id, name: u.name, points: Math.floor(u.points) }));
+        }
+        const rankIcons = ['🥇','🥈','🥉'];
+        const rankClasses = ['top1','top2','top3'];
+        let rows = lb.map((u, i) => {
+            const isMe = state.currentUser && u.id === state.currentUser.id;
+            const rankDisplay = i < 3 ? rankIcons[i] : (i + 1);
+            const rankClass = i < 3 ? rankClasses[i] : '';
+            return `
+                <div class="leaderboard-row ${isMe ? 'me' : ''}">
+                    <span class="leaderboard-rank ${rankClass}">${rankDisplay}</span>
+                    <span class="leaderboard-name">${u.name}${isMe ? ' <span style="font-size:0.7rem;opacity:0.7">(moi)</span>' : ''}</span>
+                    <span class="leaderboard-pts">${u.points} pts</span>
+                </div>
+            `;
+        }).join('');
+
+        // Bonus quotidien
+        const today = new Date().toISOString().slice(0, 10);
+        const lastClaim = state.currentUser?.lastClaim || '';
+        const canClaim = state.currentUser && lastClaim !== today;
+        const claimBtn = state.currentUser ? `
+            <button class="daily-claim-btn" ${canClaim ? '' : 'disabled'} onclick="app.claimDaily()">
+                <i class="fa-solid fa-gift"></i>
+                ${canClaim ? 'Récupérer +5 pts' : 'Bonus déjà récupéré aujourd’hui'}
+            </button>
+        ` : '';
+
+        return `
+            <aside class="leaderboard-card">
+                <div class="leaderboard-title">
+                    <i class="fa-solid fa-trophy" style="color:#fbbf24"></i> Classement
+                </div>
+                ${lb.length === 0 ? '<p style="color:var(--text-secondary);font-size:0.85rem;">Aucun joueur pour le moment.</p>' : rows}
+                ${claimBtn}
+            </aside>
+        `;
+    }
+
+    // --- Contenu principal (paris) ---
+    let marketsHtml = `
+        <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                <h1 class="page-title" style="margin-bottom:0;">Paris</h1>
+            </div>
+            ${state.useApi
+                ? '<div style="margin-bottom:1rem; font-size:0.8rem; color:var(--yes-color)"><i class="fa-solid fa-server"></i> Connecté au serveur</div>'
+                : '<div style="margin-bottom:1rem; font-size:0.8rem; color:#ff9800"><i class="fa-solid fa-database"></i> Mode local hors-ligne</div>'}
     `;
 
-    // --- Paris en cours ---
-    html += `<h2 style="font-size:1.2rem; font-weight:700; margin-bottom:1rem; color:var(--text-primary);"><i class="fa-solid fa-fire" style="color:var(--accent-color);"></i> Paris en cours</h2>`;
+    marketsHtml += `<h2 style="font-size:1.1rem; font-weight:700; margin-bottom:1rem; color:var(--text-primary);"><i class="fa-solid fa-fire" style="color:var(--accent-color);"></i> Paris en cours</h2>`;
     if (openMarkets.length === 0) {
-        html += `<p style="color:var(--text-secondary); margin-bottom:2rem;">Aucun pari en cours pour le moment.</p>`;
+        marketsHtml += `<p style="color:var(--text-secondary); margin-bottom:2rem;">Aucun pari en cours pour le moment.</p>`;
     } else {
-        html += `<div class="market-grid">`;
-        openMarkets.forEach(m => { html += renderMarketCard(m); });
-        html += `</div>`;
+        marketsHtml += `<div class="market-grid">`;
+        openMarkets.forEach(m => { marketsHtml += renderMarketCard(m); });
+        marketsHtml += `</div>`;
     }
 
-    // --- Paris clôturés ---
     if (closedMarkets.length > 0) {
-        html += `<h2 style="font-size:1.1rem; font-weight:700; margin-top:2.5rem; margin-bottom:1rem; color:var(--text-secondary);"><i class="fa-solid fa-flag-checkered"></i> Paris clôturés</h2>`;
-        html += `<div class="market-grid">`;
-        closedMarkets.forEach(m => { html += renderMarketCard(m); });
-        html += `</div>`;
+        marketsHtml += `<h2 style="font-size:1rem; font-weight:700; margin-top:2.5rem; margin-bottom:1rem; color:var(--text-secondary);"><i class="fa-solid fa-flag-checkered"></i> Paris clôturés</h2>`;
+        marketsHtml += `<div class="market-grid">`;
+        closedMarkets.forEach(m => { marketsHtml += renderMarketCard(m); });
+        marketsHtml += `</div>`;
     }
 
-    return html;
+    marketsHtml += `</div>`;
+
+    return `<div class="dashboard-layout">${marketsHtml}${renderLeaderboard()}</div>`;
 }
 
 function renderMarket(id) {
