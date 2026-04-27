@@ -55,7 +55,7 @@ DEFAULT_DB = {
     "users": {
         "admin": {
             "id": "admin", "username": "admin", "password": "admin123",
-            "name": "ADMIN BDE", "role": "admin", "status": "active",
+            "name": "ADMIN", "role": "admin", "status": "active",
             "points": 1000, "buque": "BDE", "nums": "1", "proms": "Me221",
             "transactions": []
         }
@@ -173,11 +173,13 @@ def admin_required(f):
 # HELPERS METIER
 # ──────────────────────────────────────────────────────────────────────────────
 def compute_probs(market, exclude_bet=None):
-    """Calcule les probabilités AMM de chaque option (avec slippage si exclude_bet)."""
+    """Calcule les probabilités proportionnelles aux vraies mises (hors liquidité initiale)."""
+    # Utilise les shares UNIQUEMENT issus des mises réelles
     total = sum(o["shares"] for o in market["options"])
     if exclude_bet:
         total -= exclude_bet["amount"]
     if total <= 0:
+        # Aucune mise : égalité parfaite
         n = len(market["options"])
         return {o["id"]: round(100 / n) for o in market["options"]}
     result = {}
@@ -563,6 +565,19 @@ def admin_grant_points(user_id):
     return jsonify({"ok": True, "points": db["users"][user_id]["points"]})
 
 
+@app.route("/api/admin/users/<user_id>", methods=["DELETE"])
+@admin_required
+def admin_delete_user(user_id):
+    if user_id == "admin":
+        return jsonify({"error": "Impossible de supprimer le compte super-admin"}), 400
+    db = load_db()
+    if user_id not in db["users"]:
+        return jsonify({"error": "Introuvable"}), 404
+    del db["users"][user_id]
+    save_db(db)
+    return jsonify({"ok": True})
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # ADMIN – MARCHÉS
 # ──────────────────────────────────────────────────────────────────────────────
@@ -579,10 +594,12 @@ def admin_create_market():
         return jsonify({"error": "Titre et 2+ choix requis"}), 400
 
     options = [
-        {"id": f"o{i+1}", "label": c.strip(), "shares": 100, "color": PALETTE[i % len(PALETTE)]}
+        {"id": f"o{i+1}", "label": c.strip(), "shares": 0, "color": PALETTE[i % len(PALETTE)]}
         for i, c in enumerate(choices)
     ]
-    init_probs = {o["id"]: round(100 / len(options)) for o in options}
+    n = len(options)
+    init_prob = round(100 / n)
+    init_probs = {o["id"]: init_prob for o in options}
     new_market = {
         "id": "m" + secrets.token_hex(6),
         "title": title,
