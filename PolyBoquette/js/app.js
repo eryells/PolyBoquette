@@ -979,8 +979,17 @@ function renderProposals() {
                     </div>
                     <div style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.3rem">Choix: ${p.choices.join(', ')}</div>
                     ${note}
-                </dfunction renderDashboard() {
+                </div>
+            `;
+        });
+    }
+    html += `</div></div></div>`;
+    return html;
+}
+
+function renderDashboard() {
     const isLeaderboard = state.dashTab === 'leaderboard';
+
 
     // ─── ONGLETS ───────────────────────────────────────────────────
     const tabBar = `
@@ -1062,7 +1071,7 @@ function renderProposals() {
             <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--border-color);">
                 <button class="daily-claim-btn" ${canClaim ? '' : 'disabled'} onclick="app.claimDaily()">
                     <i class="fa-solid fa-gift"></i>
-                    ${canClaim ? 'Récupérer mes +5 pts du jour' : 'Bonus déjà récupéré aujourd’hui ✔'}
+                    ${canClaim ? "R\u00e9cup\u00e9rer mes +5 pts du jour" : "Bonus d\u00e9j\u00e0 r\u00e9cup\u00e9r\u00e9 aujourd\u2019hui \u2714"}
                 </button>
             </div>
         ` : '';
