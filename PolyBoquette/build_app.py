@@ -17,7 +17,7 @@ const state = {
     theme: 'dark',
     data: {
         users: {
-            admin: { id: 'admin', username: 'admin', password: '123', name: 'ADMIN', role: 'admin', status: 'active', points: 1000, buque: 'BDE', nums: '1', proms: 'Me221' },
+            admin: { id: 'admin', username: 'admin', password: '123', name: 'ADMIN', role: 'admin', status: 'active', points: 1000, buque: 'Admin', nums: '1', proms: 'Me221' },
             user1: { id: 'user1', username: 'jean', password: '123', name: 'Jean Dupont', role: 'user', status: 'active', points: 1000, buque: 'Bab', nums: '123', proms: 'An211' },
         },
         markets: [
