@@ -9,30 +9,13 @@ const state = {
             admin: { id: 'admin', username: 'admin', password: '123', name: 'ADMIN', role: 'admin', status: 'active', points: 1000, buque: 'BDE', nums: '1', proms: 'Me221' },
             user1: { id: 'user1', username: 'jean', password: '123', name: 'Jean Dupont', role: 'user', status: 'active', points: 1000, buque: 'Bab', nums: '123', proms: 'An211' },
         },
-        markets: [
-            {
-                id: 'm1',
-                title: 'Notre école sera-t-elle dans le top 10 L\'Étudiant l\'an prochain ?',
-                image: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?auto=format&fit=crop&w=150&q=80',
-                volume: 4500,
-                status: 'open',
-                resolvedWinner: null,
-                bets: [],
-                options: [
-                    { id: 'o1', label: 'Oui', shares: 1500, color: '#0f8b65' },
-                    { id: 'o2', label: 'Non', shares: 700, color: '#d13e38' }
-                ],
-                history: [
-                    { time: 'J-6', o1: 40, o2: 60 }, { time: 'J-5', o1: 45, o2: 55 }, { time: 'J-4', o1: 55, o2: 45 },
-                    { time: 'J-3', o1: 52, o2: 48 }, { time: 'J-2', o1: 60, o2: 40 }, { time: 'J-1', o1: 68, o2: 32 }
-                ]
-            }
         ],
         proposals: [] // <-- NOUVEAU
     },
     currentView: 'dashboard',
     currentMarketId: null,
-    selectedOptionId: null
+    selectedOptionId: null,
+    chartHidden: false  // préférence utilisateur : masquer le graphe
 };
 
 const PALETTE = ['#22c55e', '#ef4444', '#3b82f6', '#d946ef', '#f97316', '#eab308', '#06b6d4'];
@@ -105,6 +88,9 @@ async function init() {
     state.theme = savedTheme;
     document.documentElement.setAttribute('data-theme', state.theme);
     updateThemeIcon();
+
+    // Chart preference
+    state.chartHidden = localStorage.getItem('chartHidden') === '1';
 
     try {
         // Tente de contacter le backend Flask
@@ -557,7 +543,7 @@ const app = {
                     }
                 } else {
                     const options = choices.map((c, i) => ({
-                        id: 'o' + (i+1), label: c, shares: 100, color: PALETTE[i % PALETTE.length]
+                        id: 'o' + (i+1), label: c, shares: 0, color: PALETTE[i % PALETTE.length]
                     }));
                     const initialProbs = {};
                     options.forEach(o => initialProbs[o.id] = Math.round(100/choices.length));
@@ -758,6 +744,35 @@ const app = {
         document.getElementById('oldPass').value = '';
         document.getElementById('newPass').value = '';
         document.getElementById('newPass2').value = '';
+    },
+
+    toggleChart: () => {
+        state.chartHidden = !state.chartHidden;
+        localStorage.setItem('chartHidden', state.chartHidden ? '1' : '0');
+        const wrapper = document.getElementById('chartWrapper');
+        const btn = document.getElementById('chartToggleBtn');
+        if (wrapper) wrapper.style.display = state.chartHidden ? 'none' : '';
+        if (btn) btn.innerHTML = state.chartHidden
+            ? '<i class="fa-solid fa-chart-line"></i> Afficher le graphe'
+            : '<i class="fa-solid fa-eye-slash"></i> Masquer le graphe';
+        if (!state.chartHidden) setTimeout(() => initChart(state.currentMarketId), 10);
+    },
+
+    deleteUser: async (userId, userName) => {
+        if (!confirm(`Supprimer définitivement le compte de "${userName}" ? Cette action est irréversible.`)) return;
+        if (state.useApi) {
+            try {
+                await apiCall('DELETE', `/api/admin/users/${userId}`);
+                ui.showToast('Compte supprimé.');
+            } catch(e) {
+                return ui.showToast(e.message, 'error');
+            }
+        } else {
+            delete state.data.users[userId];
+            saveDataLocal();
+            ui.showToast('Compte supprimé.');
+        }
+        app.navigate('admin');
     }
 };
 
@@ -1047,11 +1062,16 @@ function renderMarket(id) {
         
         <div class="detail-layout">
             <div class="chart-section">
-                <div class="chart-header">
-                    <img src="${m.image}" alt="" style="width: 64px; height: 64px; border-radius: 8px;">
-                    <h1 style="font-size: 1.5rem">${m.title}</h1>
+                <div class="chart-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem;">
+                    <div style="display:flex; align-items:center; gap:1rem;">
+                        <img src="${m.image}" alt="" style="width: 56px; height: 56px; border-radius: 8px; flex-shrink:0;">
+                        <h1 style="font-size: 1.3rem; line-height:1.3;">${m.title}</h1>
+                    </div>
+                    <button class="chart-toggle-btn" onclick="app.toggleChart()" id="chartToggleBtn">
+                        ${state.chartHidden ? '<i class="fa-solid fa-chart-line"></i> Afficher' : '<i class="fa-solid fa-eye-slash"></i> Masquer'} le graphe
+                    </button>
                 </div>
-                <div style="flex:1; width:100%; min-height: 300px; position:relative">
+                <div id="chartWrapper" style="flex:1; width:100%; min-height: 300px; position:relative; ${state.chartHidden ? 'display:none' : ''}">
                     <canvas id="marketChart"></canvas>
                 </div>
             </div>
@@ -1104,6 +1124,9 @@ function renderAdmin() {
                         <button class="btn-outline" onclick="app.grantPoints('${u.id}')"><i class="fa-solid fa-plus"></i> Points</button>
                         ${state.currentUser.id === 'admin' && u.id !== 'admin' ? 
                             `<button class="btn-outline" onclick="app.toggleAdmin('${u.id}')"><i class="fa-solid fa-star"></i> ${u.role === 'admin' ? 'Retirer Admin' : 'Nommer Admin'}</button>` 
+                            : ''}
+                        ${state.currentUser.id === 'admin' && u.id !== 'admin' ?
+                            `<button class="btn-outline" style="color:#ef4444;border-color:#ef4444" onclick="app.deleteUser('${u.id}', '${u.name}')"><i class="fa-solid fa-user-slash"></i></button>`
                             : ''}
                     </div>
                 </div>
