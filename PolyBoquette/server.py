@@ -51,17 +51,19 @@ DATABASE_URL = os.environ.get("DATABASE_URL")  # mis à dispo automatiquement pa
 USE_PG = PSYCOPG2_AVAILABLE and bool(DATABASE_URL)
 
 DEFAULT_DB = {
-    "version": 5,
+    "version": 6,
     "users": {
         "admin": {
-            "id": "admin", "username": "admin", "password": "***admin123***",
+            "id": "admin", "username": "admin", "password": "admin123",
             "name": "ADMIN", "role": "admin", "status": "active",
-            "points": 1000, "buque": "Admin", "nums": "1", "proms": "Me225",
+            "points": 1000, "buque": "BDE", "nums": "1", "proms": "Me221",
             "transactions": []
         }
     },
     "markets": [],
-    "proposals": []
+    "proposals": [],
+    "admin_grants_log": [],
+    "name_change_requests": []
 }
 
 
@@ -87,6 +89,10 @@ def _migrate(db):
     """Applique les migrations sur une DB chargée."""
     if "proposals" not in db:
         db["proposals"] = []
+    if "admin_grants_log" not in db:
+        db["admin_grants_log"] = []
+    if "name_change_requests" not in db:
+        db["name_change_requests"] = []
     for u in db["users"].values():
         if "transactions" not in u:
             u["transactions"] = []
@@ -316,8 +322,15 @@ def auth_change_password():
 def get_leaderboard():
     db = load_db()
     active = [u for u in db["users"].values() if u.get("status") == "active"]
-    ranked = sorted(active, key=lambda u: u.get("points", 0), reverse=True)[:20]
-    return jsonify([{"id": u["id"], "name": u["name"], "points": int(u["points"])} for u in ranked])
+    def total_points(u):
+        invested = sum(
+            b["amount"]
+            for m in db["markets"] if m["status"] == "open"
+            for b in m["bets"] if b["userId"] == u["id"]
+        )
+        return max(0, int(u.get("points", 0))) + invested
+    ranked = sorted(active, key=lambda u: total_points(u), reverse=True)[:20]
+    return jsonify([{"id": u["id"], "name": u["name"], "points": total_points(u)} for u in ranked])
 
 
 @app.route("/api/auth/daily-claim", methods=["POST"])
@@ -341,12 +354,14 @@ def daily_claim():
 # MARCHÉS
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/api/markets")
+@login_required
 def get_markets():
     db = load_db()
     return jsonify(db["markets"])
 
 
 @app.route("/api/markets/<market_id>")
+@login_required
 def get_market(market_id):
     db = load_db()
     m = next((m for m in db["markets"] if m["id"] == market_id), None)
@@ -382,19 +397,31 @@ def place_bet(market_id):
     opt["shares"] += amount
 
     probs = compute_probs(m)
-    now_str = datetime.now(timezone.utc).strftime("%H:%M")
-    bet = {
-        "id": "b" + secrets.token_hex(8),
-        "userId": user["id"],
-        "optId": opt_id,
-        "amount": amount,
-        "buyProb": probs[opt_id],
-        "time": datetime.now(timezone.utc).isoformat()
-    }
-    m["bets"].append(bet)
-    hist = {"time": now_str, **probs}
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Agrégation : fusionner avec une position existante (même user, même option)
+    existing = next((b for b in m["bets"] if b["userId"] == user["id"] and b["optId"] == opt_id), None)
+    if existing:
+        old_amount = existing["amount"]
+        new_total = old_amount + amount
+        # Moyenne pondérée du prix d'achat
+        existing["buyProb"] = round((existing["buyProb"] * old_amount + probs[opt_id] * amount) / new_total)
+        existing["amount"] = new_total
+        existing["time"] = now_iso
+    else:
+        bet = {
+            "id": "b" + secrets.token_hex(8),
+            "userId": user["id"],
+            "optId": opt_id,
+            "amount": amount,
+            "buyProb": probs[opt_id],
+            "time": now_iso
+        }
+        m["bets"].append(bet)
+
+    hist = {"time": now_iso, **probs}
     m["history"].append(hist)
-    
+
     add_tx(user, f"Mise dans '{m['title']}'", -amount)
 
     save_db(db)
@@ -404,6 +431,7 @@ def place_bet(market_id):
 @app.route("/api/markets/<market_id>/cashout/<bet_id>", methods=["POST"])
 @login_required
 def cashout_bet(market_id, bet_id):
+    data = request.get_json() or {}
     db = load_db()
     user = db["users"].get(session["user_id"])
     m = next((m for m in db["markets"] if m["id"] == market_id), None)
@@ -416,21 +444,33 @@ def cashout_bet(market_id, bet_id):
     if bet["userId"] != user["id"]:
         return jsonify({"error": "Pas votre pari"}), 403
 
-    adj_probs = compute_probs(m, exclude_bet=bet)
+    # Revente partielle : montant optionnel, défaut = tout
+    requested = data.get("amount", bet["amount"])
+    if not isinstance(requested, int) or requested <= 0:
+        requested = bet["amount"]
+    partial_amount = min(requested, bet["amount"])
+
+    # Calcul du remboursement proportionnel
+    partial_bet_proxy = {"amount": partial_amount, "optId": bet["optId"]}
+    adj_probs = compute_probs(m, exclude_bet=partial_bet_proxy)
     current_prob = adj_probs.get(bet["optId"], 1)
-    raw_value = bet["amount"] * (current_prob / (bet["buyProb"] or 1))
+    raw_value = partial_amount * (current_prob / (bet["buyProb"] or 1))
     refund = max(1, int(raw_value * 0.97))
 
     user["points"] += refund
-    m["volume"] = max(1, m["volume"] - refund)
+    m["volume"] = max(0, m["volume"] - partial_amount)
     opt = next(o for o in m["options"] if o["id"] == bet["optId"])
-    opt["shares"] = max(1, opt["shares"] - refund)
+    opt["shares"] = max(0, opt["shares"] - partial_amount)
 
+    now_iso = datetime.now(timezone.utc).isoformat()
     new_probs = compute_probs(m)
-    now_str = datetime.now(timezone.utc).strftime("%H:%M")
-    m["history"].append({"time": now_str, **new_probs})
-    m["bets"].pop(bet_idx)
-    
+    m["history"].append({"time": now_iso, **new_probs})
+
+    if partial_amount >= bet["amount"]:
+        m["bets"].pop(bet_idx)
+    else:
+        bet["amount"] -= partial_amount
+
     add_tx(user, f"Revente dans '{m['title']}'", refund)
 
     save_db(db)
@@ -588,10 +628,21 @@ def admin_grant_points(user_id):
         return jsonify({"error": "Introuvable"}), 404
     if not isinstance(amount, int) or amount == 0:
         return jsonify({"error": "Montant invalide (ne peut pas être zéro)"}), 400
+    admin_user = db["users"].get(session["user_id"])
     user = db["users"][user_id]
     user["points"] = max(0, user["points"] + amount)
     desc = f"Crédit admin : +{amount} pts" if amount > 0 else f"Débit admin : {amount} pts"
     add_tx(user, desc, amount)
+    # Journaliser dans admin_grants_log
+    db["admin_grants_log"].insert(0, {
+        "time": datetime.now(timezone.utc).isoformat(),
+        "adminId": admin_user["id"],
+        "adminName": admin_user["name"],
+        "targetId": user["id"],
+        "targetName": user["name"],
+        "amount": amount
+    })
+    db["admin_grants_log"] = db["admin_grants_log"][:200]
     save_db(db)
     return jsonify({"ok": True, "points": user["points"]})
 
@@ -734,11 +785,89 @@ def get_user_transactions(user_id):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# ADMIN – JOURNAL DES CRÉDITS
+# ──────────────────────────────────────────────────────────────────────────────
+@app.route("/api/admin/grants-log")
+@admin_required
+def admin_grants_log():
+    """Accessible uniquement par le super-admin (id='admin')."""
+    if session["user_id"] != "admin":
+        return jsonify({"error": "Réservé au super-admin"}), 403
+    db = load_db()
+    return jsonify(db.get("admin_grants_log", []))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# DEMANDES DE CHANGEMENT DE PSEUDONYME
+# ──────────────────────────────────────────────────────────────────────────────
+@app.route("/api/profile/request-name-change", methods=["POST"])
+@login_required
+def request_name_change():
+    data = request.get_json()
+    new_name = (data.get("newName") or "").strip()
+    if not new_name or len(new_name) < 2:
+        return jsonify({"error": "Le pseudonyme doit faire au moins 2 caractères"}), 400
+    db = load_db()
+    user = db["users"].get(session["user_id"])
+    # Vérifier qu'il n'y a pas déjà une demande en attente
+    pending = next((r for r in db["name_change_requests"]
+                    if r["userId"] == user["id"] and r["status"] == "pending"), None)
+    if pending:
+        return jsonify({"error": "Vous avez déjà une demande en attente"}), 400
+    req = {
+        "id": "nc" + secrets.token_hex(6),
+        "userId": user["id"],
+        "oldName": user["name"],
+        "newName": new_name,
+        "status": "pending",
+        "createdAt": datetime.now(timezone.utc).isoformat()
+    }
+    db["name_change_requests"].insert(0, req)
+    save_db(db)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/name-changes")
+@admin_required
+def admin_get_name_changes():
+    db = load_db()
+    return jsonify([r for r in db["name_change_requests"] if r["status"] == "pending"])
+
+
+@app.route("/api/admin/name-change/<req_id>/approve", methods=["POST"])
+@admin_required
+def admin_approve_name_change(req_id):
+    db = load_db()
+    req = next((r for r in db["name_change_requests"] if r["id"] == req_id), None)
+    if not req:
+        return jsonify({"error": "Demande introuvable"}), 404
+    user = db["users"].get(req["userId"])
+    if user:
+        user["name"] = req["newName"]
+        add_tx(user, f"Pseudonyme changé en '{req['newName']}'", 0)
+    req["status"] = "approved"
+    save_db(db)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/name-change/<req_id>/reject", methods=["POST"])
+@admin_required
+def admin_reject_name_change(req_id):
+    db = load_db()
+    req = next((r for r in db["name_change_requests"] if r["id"] == req_id), None)
+    if not req:
+        return jsonify({"error": "Demande introuvable"}), 404
+    req["status"] = "rejected"
+    save_db(db)
+    return jsonify({"ok": True})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # ENTRYPOINT
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_ENV") != "production"
-    print(f"🚀 PolyBoquette démarre sur http://localhost:{port}")
+    print(f"[OK] PolyBoquette demarre sur http://localhost:{port}")
     print(f"   DB : {DB_PATH}")
     app.run(host="0.0.0.0", port=port, debug=debug)
