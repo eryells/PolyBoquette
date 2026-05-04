@@ -322,15 +322,11 @@ def auth_change_password():
 def get_leaderboard():
     db = load_db()
     active = [u for u in db["users"].values() if u.get("status") == "active"]
-    def total_points(u):
-        invested = sum(
-            b["amount"]
-            for m in db["markets"] if m["status"] == "open"
-            for b in m["bets"] if b["userId"] == u["id"]
-        )
-        return max(0, int(u.get("points", 0))) + invested
-    ranked = sorted(active, key=lambda u: total_points(u), reverse=True)[:20]
-    return jsonify([{"id": u["id"], "name": u["name"], "points": total_points(u)} for u in ranked])
+    # Le classement ne concerne que les points non investis
+    def free_points(u):
+        return max(0, int(u.get("points", 0)))
+    ranked = sorted(active, key=lambda u: free_points(u), reverse=True)[:20]
+    return jsonify([{"id": u["id"], "name": u["name"], "points": free_points(u)} for u in ranked])
 
 
 @app.route("/api/auth/daily-claim", methods=["POST"])
