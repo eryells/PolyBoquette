@@ -1110,25 +1110,17 @@ function renderDashboard() {
     if (isLeaderboard) {
         let lb = state.leaderboard;
         
-        // Fonction pour calculer les points totaux (libres + investis) d'un utilisateur
-        const getTotalPoints = (u) => {
-            let invested = 0;
-            state.data.markets.forEach(m => {
-                if (m.status === 'open') {
-                    m.bets.forEach(b => {
-                        if (b.userId === u.id) invested += b.amount;
-                    });
-                }
-            });
-            return Math.max(0, Math.floor(u.points || 0)) + invested;
+        // Fonction pour récupérer les points libres
+        const getFreePoints = (u) => {
+            return Math.max(0, Math.floor(u.points || 0));
         };
 
         if (!state.useApi || !lb || lb.length === 0) {
             lb = Object.values(state.data.users)
                 .filter(u => u.status === 'active')
-                .sort((a, b) => getTotalPoints(b) - getTotalPoints(a))
+                .sort((a, b) => getFreePoints(b) - getFreePoints(a))
                 .slice(0, 20)
-                .map(u => ({ id: u.id, name: u.name, points: getTotalPoints(u) }));
+                .map(u => ({ id: u.id, name: u.name, points: getFreePoints(u) }));
         }
 
         // Rang de l'utilisateur courant (peut ne pas être dans le top 20)
@@ -1139,12 +1131,12 @@ function renderDashboard() {
                 // L'utilisateur n'est pas dans le top 20 : calculer son rang réel
                 const allSorted = Object.values(state.data.users)
                     .filter(u => u.status === 'active')
-                    .sort((a, b) => getTotalPoints(b) - getTotalPoints(a));
+                    .sort((a, b) => getFreePoints(b) - getFreePoints(a));
                 const realRank = allSorted.findIndex(u => u.id === state.currentUser.id) + 1;
                 if (realRank > 0) {
                     const myTotal = state.useApi ? 
-                        (state.leaderboard.find(u => u.id === state.currentUser.id)?.points || getTotalPoints(state.currentUser)) : 
-                        getTotalPoints(state.currentUser);
+                        (state.leaderboard.find(u => u.id === state.currentUser.id)?.points || getFreePoints(state.currentUser)) : 
+                        getFreePoints(state.currentUser);
                     myRankHtml = `
                         <div style="margin-top:1rem; padding-top:1rem; border-top:2px dashed var(--border-color);">
                             <div class="leaderboard-row me">
@@ -1639,6 +1631,17 @@ function initChart(marketId) {
                             return d.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit' }) + ' ' + d.toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
                         },
                         label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y}%`
+                    }
+                },
+                zoom: {
+                    pan: {
+                        enabled: true,
+                        mode: 'x'
+                    },
+                    zoom: {
+                        wheel: { enabled: true },
+                        pinch: { enabled: true },
+                        mode: 'x'
                     }
                 }
             },
