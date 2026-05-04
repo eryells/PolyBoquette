@@ -1591,17 +1591,44 @@ function initChart(marketId) {
     const isDark = state.theme === 'dark';
 
     // Formater les labels : ISO -> timestamp (pour axe X linéaire)
-    let lastValidTime = Date.now() - 3600000;
-    const historyData = market.history.map((h, i) => {
-        let xVal = lastValidTime + (i * 1000); // fallback léger espacement
+    // Trouver le premier timestamp valide pour avoir une base de temps
+    let firstValidMs = null;
+    for (let h of market.history) {
         if (h.time && (h.time.includes('T') || h.time.includes('-'))) {
             const ms = new Date(h.time).getTime();
-            if (!isNaN(ms)) {
-                xVal = ms;
-                lastValidTime = ms;
+            if (!isNaN(ms)) { firstValidMs = ms; break; }
+        } else if (h.time && /^\d{1,2}:\d{2}$/.test(h.time)) {
+            const [hh, mm] = h.time.split(':');
+            const d = new Date();
+            d.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
+            firstValidMs = d.getTime();
+            break;
+        }
+    }
+    if (!firstValidMs) firstValidMs = Date.now();
+
+    // On s'assure que le temps ne va jamais en arrière
+    let currentMs = firstValidMs - (market.history.length * 60000); // base reculée d'une minute par entrée
+    const historyData = market.history.map((h) => {
+        let parsedMs = null;
+        if (h.time) {
+            if (h.time.includes('T') || h.time.includes('-')) {
+                parsedMs = new Date(h.time).getTime();
+            } else if (/^\d{1,2}:\d{2}$/.test(h.time)) {
+                const [hh, mm] = h.time.split(':');
+                const d = new Date();
+                d.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
+                parsedMs = d.getTime();
             }
         }
-        return { ...h, xVal };
+        
+        if (parsedMs && !isNaN(parsedMs) && parsedMs >= currentMs) {
+            currentMs = parsedMs;
+        } else {
+            // Fallback si non parsable ou si la date recule dans le temps (pour forcer un ordre strictement croissant)
+            currentMs += 1000; 
+        }
+        return { ...h, xVal: currentMs };
     });
 
     const datasets = market.options.map(opt => ({
