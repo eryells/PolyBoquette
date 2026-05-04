@@ -1422,6 +1422,9 @@ function renderMarket(id) {
                 </div>
                 <div id="chartWrapper" style="flex:1; width:100%; min-height: 300px; position:relative; ${state.chartHidden ? 'display:none' : ''}">
                     <canvas id="marketChart"></canvas>
+                    <div style="font-size:0.75rem; color:var(--text-secondary); text-align:center; margin-top:0.5rem; opacity:0.8;">
+                        <i class="fa-solid fa-eye"></i> Astuce : Cliquez sur les noms dans la légende ci-dessus pour masquer ou afficher une courbe spécifique.
+                    </div>
                 </div>
             </div>
 
@@ -1637,7 +1640,7 @@ function initChart(marketId) {
         borderColor: opt.color,
         backgroundColor: 'transparent',
         borderWidth: 4,
-        tension: 0.4,
+        stepped: true,
         pointRadius: 5,
         pointHoverRadius: 8
     }));
