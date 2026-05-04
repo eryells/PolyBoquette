@@ -56,7 +56,7 @@ DEFAULT_DB = {
         "admin": {
             "id": "admin", "username": "admin", "password": "admin123",
             "name": "ADMIN", "role": "admin", "status": "active",
-            "points": 1000, "buque": "BDE", "nums": "1", "proms": "Me221",
+            "points": 1000, "buque": "admin", "nums": "00", "proms": "Me225",
             "transactions": []
         }
     },
