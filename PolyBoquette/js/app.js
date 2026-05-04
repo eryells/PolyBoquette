@@ -1638,11 +1638,11 @@ function initChart(marketId) {
         label: opt.label,
         data: historyData.map(h => ({ x: h.xVal, y: h[opt.id] })),
         borderColor: opt.color,
-        backgroundColor: 'transparent',
-        borderWidth: 4,
+        backgroundColor: opt.color,
+        borderWidth: 3,
         stepped: true,
-        pointRadius: 5,
-        pointHoverRadius: 8
+        pointRadius: 1,
+        pointHoverRadius: 4
     }));
 
     currentChart = new Chart(ctx, {
