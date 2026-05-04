@@ -1109,12 +1109,26 @@ function renderDashboard() {
     // ─── ONGLET CLASSEMENT ─────────────────────────────────────────
     if (isLeaderboard) {
         let lb = state.leaderboard;
-        if (!state.useApi || lb.length === 0) {
+        
+        // Fonction pour calculer les points totaux (libres + investis) d'un utilisateur
+        const getTotalPoints = (u) => {
+            let invested = 0;
+            state.data.markets.forEach(m => {
+                if (m.status === 'open') {
+                    m.bets.forEach(b => {
+                        if (b.userId === u.id) invested += b.amount;
+                    });
+                }
+            });
+            return Math.max(0, Math.floor(u.points || 0)) + invested;
+        };
+
+        if (!state.useApi || !lb || lb.length === 0) {
             lb = Object.values(state.data.users)
                 .filter(u => u.status === 'active')
-                .sort((a,b) => b.points - a.points)
+                .sort((a, b) => getTotalPoints(b) - getTotalPoints(a))
                 .slice(0, 20)
-                .map(u => ({ id: u.id, name: u.name, points: Math.floor(u.points) }));
+                .map(u => ({ id: u.id, name: u.name, points: getTotalPoints(u) }));
         }
 
         // Rang de l'utilisateur courant (peut ne pas être dans le top 20)
@@ -1125,15 +1139,18 @@ function renderDashboard() {
                 // L'utilisateur n'est pas dans le top 20 : calculer son rang réel
                 const allSorted = Object.values(state.data.users)
                     .filter(u => u.status === 'active')
-                    .sort((a,b) => b.points - a.points);
+                    .sort((a, b) => getTotalPoints(b) - getTotalPoints(a));
                 const realRank = allSorted.findIndex(u => u.id === state.currentUser.id) + 1;
                 if (realRank > 0) {
+                    const myTotal = state.useApi ? 
+                        (state.leaderboard.find(u => u.id === state.currentUser.id)?.points || getTotalPoints(state.currentUser)) : 
+                        getTotalPoints(state.currentUser);
                     myRankHtml = `
                         <div style="margin-top:1rem; padding-top:1rem; border-top:2px dashed var(--border-color);">
                             <div class="leaderboard-row me">
                                 <span class="leaderboard-rank" style="width:2rem;">#${realRank}</span>
                                 <span class="leaderboard-name">${state.currentUser.name} <span style="font-size:0.75rem;opacity:0.7">(moi)</span></span>
-                                <span class="leaderboard-pts">${Math.floor(state.currentUser.points)} pts</span>
+                                <span class="leaderboard-pts">${myTotal} pts</span>
                             </div>
                         </div>
                     `;
@@ -1581,23 +1598,23 @@ function initChart(marketId) {
     const market = state.data.markets.find(m => m.id === marketId);
     const isDark = state.theme === 'dark';
 
-    // Formater les labels : ISO -> date/heure ou garder 'Début'
-    const formatLabel = (t) => {
-        if (!t || t === 'Début' || t === 'Debut') return 'Début';
-        // Si c'est un ISO timestamp
-        if (t.includes('T') || t.includes('-')) {
-            const d = new Date(t);
-            if (!isNaN(d)) {
-                return d.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit' })
-                    + ' ' + d.toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+    // Formater les labels : ISO -> timestamp (pour axe X linéaire)
+    let lastValidTime = Date.now() - 3600000;
+    const historyData = market.history.map((h, i) => {
+        let xVal = lastValidTime + (i * 1000); // fallback léger espacement
+        if (h.time && (h.time.includes('T') || h.time.includes('-'))) {
+            const ms = new Date(h.time).getTime();
+            if (!isNaN(ms)) {
+                xVal = ms;
+                lastValidTime = ms;
             }
         }
-        return t; // fallback (ancien format HH:MM)
-    };
+        return { ...h, xVal };
+    });
 
     const datasets = market.options.map(opt => ({
         label: opt.label,
-        data: market.history.map(h => h[opt.id]),
+        data: historyData.map(h => ({ x: h.xVal, y: h[opt.id] })),
         borderColor: opt.color,
         backgroundColor: 'transparent',
         borderWidth: 4,
@@ -1608,14 +1625,21 @@ function initChart(marketId) {
 
     currentChart = new Chart(ctx, {
         type: 'line',
-        data: { labels: market.history.map(h => formatLabel(h.time)), datasets: datasets },
+        data: { datasets: datasets },
         options: {
             responsive: true, maintainAspectRatio: false,
             plugins: {
                 legend: { labels: { color: isDark ? '#a0a0a0' : '#666666' } },
                 tooltip: {
                     mode: 'index', intersect: false,
-                    callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y}%` }
+                    callbacks: {
+                        title: (tooltipItems) => {
+                            if (!tooltipItems.length) return '';
+                            const d = new Date(tooltipItems[0].parsed.x);
+                            return d.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit' }) + ' ' + d.toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+                        },
+                        label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y}%`
+                    }
                 }
             },
             scales: {
@@ -1624,7 +1648,18 @@ function initChart(marketId) {
                     grid: { color: isDark ? '#333333' : '#e5e5e5' },
                     ticks: { color: isDark ? '#a0a0a0' : '#666666', callback: v => v + '%' }
                 },
-                x: { grid: { display: false }, ticks: { color: isDark ? '#a0a0a0' : '#666666', maxRotation: 30, maxTicksLimit: 10 } }
+                x: {
+                    type: 'linear',
+                    grid: { display: false },
+                    ticks: {
+                        color: isDark ? '#a0a0a0' : '#666666',
+                        maxRotation: 30, maxTicksLimit: 10,
+                        callback: function(value) {
+                            const d = new Date(value);
+                            return d.toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+                        }
+                    }
+                }
             },
             interaction: { mode: 'nearest', axis: 'x', intersect: false }
         }
