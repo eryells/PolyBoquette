@@ -1420,7 +1420,7 @@ function renderMarket(id) {
                         ${state.chartHidden ? '<i class="fa-solid fa-chart-line"></i> Afficher' : '<i class="fa-solid fa-eye-slash"></i> Masquer'} le graphe
                     </button>
                 </div>
-                <div id="chartWrapper" style="flex:1; width:100%; min-height: 300px; position:relative; ${state.chartHidden ? 'display:none' : ''}">
+                <div id="chartWrapper" style="width:100%; height: 320px; position:relative; ${state.chartHidden ? 'display:none' : ''}">
                     <canvas id="marketChart"></canvas>
                     <div style="font-size:0.75rem; color:var(--text-secondary); text-align:center; margin-top:0.5rem; opacity:0.8;">
                         <i class="fa-solid fa-eye"></i> Astuce : Cliquez sur les noms dans la légende ci-dessus pour masquer ou afficher une courbe spécifique.
