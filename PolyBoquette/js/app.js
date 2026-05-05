@@ -1604,7 +1604,10 @@ function initChart(marketId) {
             const [hh, mm] = h.time.split(':');
             const d = new Date();
             d.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
-            firstValidMs = d.getTime();
+            let ms = d.getTime();
+            // Eviter que l'heure parsée ne soit dans le futur (ex: bet fait hier à 23h, parsé aujourd'hui)
+            while (ms > Date.now()) ms -= 24 * 3600 * 1000;
+            firstValidMs = ms;
             break;
         }
     }
@@ -1622,6 +1625,10 @@ function initChart(marketId) {
                 const d = new Date();
                 d.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
                 parsedMs = d.getTime();
+                // Si l'heure parsée est dans le futur par rapport à maintenant, c'est qu'elle date d'un jour précédent
+                while (parsedMs > Date.now()) {
+                    parsedMs -= 24 * 3600 * 1000;
+                }
             }
         }
         
