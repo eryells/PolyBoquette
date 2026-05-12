@@ -205,29 +205,6 @@ async function apiCall(method, url, data = null) {
 
 // --- LOGIQUE METIER ---
 const app = {
-    claimDaily: async () => {
-        if(state.useApi) {
-            try {
-                const res = await apiCall('POST', '/api/auth/daily-claim');
-                state.currentUser = res.user;
-                ui.showToast("+5 points récupérés !");
-                updateNavbar();
-                app.navigate('dashboard');
-            } catch(e) {
-                ui.showToast(e.message, 'error');
-            }
-        } else {
-            const today = new Date().toISOString().split('T')[0];
-            if(state.currentUser.lastClaim === today) return ui.showToast("Déjà récupéré aujourd'hui", "error");
-            state.currentUser.lastClaim = today;
-            state.currentUser.points += 5;
-            saveDataLocal();
-            ui.showToast("+5 points récupérés !");
-            updateNavbar();
-            app.navigate('dashboard');
-        }
-    },
-
     toggleTheme: () => {
         state.theme = state.theme === 'dark' ? 'light' : 'dark';
         document.documentElement.setAttribute('data-theme', state.theme);
@@ -1175,18 +1152,6 @@ function renderDashboard() {
             `;
         }).join('');
 
-        // Bonus quotidien
-        const today = new Date().toISOString().slice(0, 10);
-        const canClaim = state.currentUser && (state.currentUser.lastClaim || '') !== today;
-        const claimSection = state.currentUser ? `
-            <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--border-color);">
-                <button class="daily-claim-btn" ${canClaim ? '' : 'disabled'} onclick="app.claimDaily()">
-                    <i class="fa-solid fa-gift"></i>
-                    ${canClaim ? "R\u00e9cup\u00e9rer mes +5 pts du jour" : "Bonus d\u00e9j\u00e0 r\u00e9cup\u00e9r\u00e9 aujourd\u2019hui \u2714"}
-                </button>
-            </div>
-        ` : '';
-
         const leaderboardContent = `
             <div style="max-width:640px; margin:0 auto;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
@@ -1201,7 +1166,6 @@ function renderDashboard() {
                         : rows}
                     ${myRankHtml}
                 </div>
-                ${claimSection}
             </div>
         `;
 
@@ -1653,10 +1617,10 @@ function initChart(marketId) {
     });
 
     const currentProbs = getProbabilities(market);
-    // Sort options by probability ascending, so the one with the highest probability is drawn last (on top)
-    const sortedOptions = [...market.options].sort((a, b) => currentProbs[a.id] - currentProbs[b.id]);
+    // Sort options descending so highest probability is first in legend and tooltip
+    const sortedOptions = [...market.options].sort((a, b) => currentProbs[b.id] - currentProbs[a.id]);
 
-    const datasets = sortedOptions.map(opt => ({
+    const datasets = sortedOptions.map((opt, i) => ({
         label: opt.label,
         data: historyData.map(h => ({ x: h.xVal, y: h[opt.id] })),
         borderColor: opt.color,
@@ -1664,7 +1628,8 @@ function initChart(marketId) {
         borderWidth: 3,
         stepped: true,
         pointRadius: 1,
-        pointHoverRadius: 4
+        pointHoverRadius: 4,
+        order: i // Lowest order (i=0) is drawn on top!
     }));
 
     currentChart = new Chart(ctx, {
