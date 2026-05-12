@@ -6,33 +6,19 @@ const state = {
     theme: 'dark',
     data: {
         users: {
-            admin: { id: 'admin', username: 'admin', password: '123', name: 'ADMIN', role: 'admin', status: 'active', points: 1000, buque: 'Admin', nums: '1', proms: 'Me221' },
+            admin: { id: 'admin', username: 'admin', password: '123', name: 'ADMIN', role: 'admin', status: 'active', points: 1000, buque: 'Admin', nums: '00', proms: 'Me221' },
             user1: { id: 'user1', username: 'jean', password: '123', name: 'Jean Dupont', role: 'user', status: 'active', points: 1000, buque: 'Bab', nums: '123', proms: 'An211' },
         },
-        markets: [
-            {
-                id: 'm1',
-                title: 'Notre école sera-t-elle dans le top 10 L\'Étudiant l\'an prochain ?',
-                image: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?auto=format&fit=crop&w=150&q=80',
-                volume: 4500,
-                status: 'open',
-                resolvedWinner: null,
-                bets: [],
-                options: [
-                    { id: 'o1', label: 'Oui', shares: 1500, color: '#0f8b65' },
-                    { id: 'o2', label: 'Non', shares: 700, color: '#d13e38' }
-                ],
-                history: [
-                    { time: 'J-6', o1: 40, o2: 60 }, { time: 'J-5', o1: 45, o2: 55 }, { time: 'J-4', o1: 55, o2: 45 },
-                    { time: 'J-3', o1: 52, o2: 48 }, { time: 'J-2', o1: 60, o2: 40 }, { time: 'J-1', o1: 68, o2: 32 }
-                ]
-            }
-        ],
+        markets: [],
         proposals: [] // <-- NOUVEAU
     },
     currentView: 'dashboard',
     currentMarketId: null,
-    selectedOptionId: null
+    selectedOptionId: null,
+    chartHidden: false,
+    leaderboard: [],
+    canClaim: false,
+    dashTab: 'markets'   // 'markets' | 'leaderboard'
 };
 
 const PALETTE = ['#22c55e', '#ef4444', '#3b82f6', '#d946ef', '#f97316', '#eab308', '#06b6d4'];
@@ -106,6 +92,9 @@ async function init() {
     document.documentElement.setAttribute('data-theme', state.theme);
     updateThemeIcon();
 
+    // Chart preference
+    state.chartHidden = localStorage.getItem('chartHidden') === '1';
+
     try {
         // Tente de contacter le backend Flask
         const res = await fetch('/api/auth/me');
@@ -134,6 +123,9 @@ function initLocalData() {
         if (saved) {
             const parsed = JSON.parse(saved);
             if (!parsed.proposals) parsed.proposals = []; // migration v5
+            Object.values(parsed.users).forEach(u => {
+                if(!u.transactions) u.transactions = [];
+            });
             state.data = parsed;
         } else {
             saveDataLocal();
@@ -153,25 +145,49 @@ function saveDataLocal() {
     }
 }
 
+function addLocalTx(user, desc, amount) {
+    if(!user.transactions) user.transactions = [];
+    user.transactions.unshift({
+        time: new Date().toISOString(),
+        desc: desc,
+        amount: amount
+    });
+    if(user.transactions.length > 50) user.transactions.pop();
+}
+
 async function refreshServerData() {
     if(!state.useApi) return;
-    const [mRes, pRes] = await Promise.all([
-        fetch('/api/markets').catch(()=>null),
-        state.currentUser ? fetch('/api/proposals').catch(()=>null) : Promise.resolve(null)
+    const marketsRes = state.currentUser ? fetch('/api/markets').catch(()=>null) : Promise.resolve(null);
+    const [mRes, pRes, lbRes] = await Promise.all([
+        marketsRes,
+        state.currentUser ? fetch('/api/proposals').catch(()=>null) : Promise.resolve(null),
+        fetch('/api/leaderboard').catch(()=>null)
     ]);
     if(mRes && mRes.ok) state.data.markets = await mRes.json();
     if(pRes && pRes.ok) state.data.proposals = await pRes.json();
-    
+    if(lbRes && lbRes.ok) state.leaderboard = await lbRes.json();
+
     if(state.currentUser?.role === 'admin') {
-        const uRes = await fetch('/api/admin/users').catch(()=>null);
+        const [uRes, ncRes] = await Promise.all([
+            fetch('/api/admin/users').catch(()=>null),
+            fetch('/api/admin/name-changes').catch(()=>null)
+        ]);
         if(uRes && uRes.ok) {
             const users = await uRes.json();
             state.data.users = {};
             users.forEach(u => state.data.users[u.id] = u);
         }
+        if(ncRes && ncRes.ok) state.data.nameChangeRequests = await ncRes.json();
     } else if (state.currentUser) {
         state.data.users = {};
         state.data.users[state.currentUser.id] = state.currentUser;
+    }
+
+    // Vérifier si le bonus quotidien est disponible
+    if (state.currentUser) {
+        const today = new Date().toISOString().slice(0, 10);
+        const lastClaim = state.currentUser.lastClaim || '';
+        state.canClaim = lastClaim !== today;
     }
 }
 
@@ -189,6 +205,29 @@ async function apiCall(method, url, data = null) {
 
 // --- LOGIQUE METIER ---
 const app = {
+    claimDaily: async () => {
+        if(state.useApi) {
+            try {
+                const res = await apiCall('POST', '/api/auth/daily-claim');
+                state.currentUser = res.user;
+                ui.showToast("+5 points récupérés !");
+                updateNavbar();
+                app.navigate('dashboard');
+            } catch(e) {
+                ui.showToast(e.message, 'error');
+            }
+        } else {
+            const today = new Date().toISOString().split('T')[0];
+            if(state.currentUser.lastClaim === today) return ui.showToast("Déjà récupéré aujourd'hui", "error");
+            state.currentUser.lastClaim = today;
+            state.currentUser.points += 5;
+            saveDataLocal();
+            ui.showToast("+5 points récupérés !");
+            updateNavbar();
+            app.navigate('dashboard');
+        }
+    },
+
     toggleTheme: () => {
         state.theme = state.theme === 'dark' ? 'light' : 'dark';
         document.documentElement.setAttribute('data-theme', state.theme);
@@ -231,6 +270,7 @@ const app = {
         else if (view === 'login') container.innerHTML = renderLogin();
         else if (view === 'register') container.innerHTML = renderRegister();
         else if (view === 'proposals') container.innerHTML = renderProposals();
+        else if (view === 'profile') container.innerHTML = renderProfile();
     },
 
     selectOption: (optId) => {
@@ -264,19 +304,20 @@ const app = {
             ui.showToast("Veuillez vous connecter pour miser !", 'error');
             return app.navigate('login');
         }
-        
+
         const amount = parseInt(document.getElementById('betAmount').value);
         if (isNaN(amount) || amount <= 0) return ui.showToast("Montant invalide", 'error');
         if (state.currentUser.points < amount) return ui.showToast("Solde insuffisant !", 'error');
 
         const market = state.data.markets.find(m => m.id === state.currentMarketId);
         if (market.status !== 'open') return ui.showToast("Ce pari n'accepte plus de transactions !", 'error');
-        
+
         const optId = state.selectedOptionId;
 
         if (state.useApi) {
             try {
-                await apiCall('POST', `/api/markets/${market.id}/bet`, { optId, amount });
+                const res = await apiCall('POST', `/api/markets/${market.id}/bet`, { optId, amount });
+                if (res.user) state.currentUser = res.user;
                 ui.showToast("Mise effectuée avec succès !");
             } catch(e) {
                 return ui.showToast(e.message, 'error');
@@ -287,35 +328,45 @@ const app = {
             const option = market.options.find(o => o.id === optId);
             option.shares += amount;
             const probs = getProbabilities(market);
-            market.bets.push({
-                id: 'b' + Date.now() + Math.floor(Math.random()*100),
-                userId: state.currentUser.id,
-                optId: optId,
-                amount: amount,
-                buyProb: probs[optId],
-                time: new Date().toISOString()
-            });
-            const now = new Date();
-            const timeStr = now.getHours() + ':' + String(now.getMinutes()).padStart(2, '0');
-            const historyEntry = { time: timeStr };
-            Object.keys(probs).forEach(k => { historyEntry[k] = probs[k] });
-            market.history.push(historyEntry);
+            const now_iso = new Date().toISOString();
+            // Agrégation locale : fusionner avec position existante
+            const existing = market.bets.find(b => b.userId === state.currentUser.id && b.optId === optId);
+            if (existing) {
+                const oldAmt = existing.amount;
+                const newTotal = oldAmt + amount;
+                existing.buyProb = Math.round((existing.buyProb * oldAmt + probs[optId] * amount) / newTotal);
+                existing.amount = newTotal;
+                existing.time = now_iso;
+            } else {
+                market.bets.push({
+                    id: 'b' + Date.now() + Math.floor(Math.random()*100),
+                    userId: state.currentUser.id,
+                    optId, amount,
+                    buyProb: probs[optId],
+                    time: now_iso
+                });
+            }
+            market.history.push({ time: now_iso, ...probs });
+            addLocalTx(state.currentUser, `Mise dans '${market.title}'`, -amount);
+            state.data.users[state.currentUser.id].points = state.currentUser.points;
             saveDataLocal();
             ui.showToast("Mise effectuée avec succès !");
         }
-        
+
         updateNavbar();
-        app.navigate('market', market.id); 
+        app.navigate('market', market.id);
     },
     
-    cashOutBet: async (marketId, betId) => {
+    cashOutBet: async (marketId, betId, partialAmount) => {
         const market = state.data.markets.find(m => m.id === marketId);
         if (market.status !== 'open') return ui.showToast("Le marché ne permet plus de revente !", 'error');
-        
+
         if (state.useApi) {
             try {
-                const res = await apiCall('POST', `/api/markets/${marketId}/cashout/${betId}`);
-                ui.showToast(`Vous avez retiré votre liquidité (${res.refund} points).`);
+                const body = partialAmount ? { amount: partialAmount } : {};
+                const res = await apiCall('POST', `/api/markets/${marketId}/cashout/${betId}`, body);
+                if (res.user) state.currentUser = res.user;
+                ui.showToast(`Revente effectuée : +${res.refund} points.`);
             } catch(e) {
                 return ui.showToast(e.message, 'error');
             }
@@ -323,30 +374,34 @@ const app = {
             const betIndex = market.bets.findIndex(b => b.id === betId);
             const bet = market.bets[betIndex];
             if(bet.userId !== state.currentUser?.id) return;
-            
-            const adjustedProbs = getAdjustedProbabilities(market, bet);
+
+            const sellAmt = partialAmount ? Math.min(partialAmount, bet.amount) : bet.amount;
+            const proxyBet = { amount: sellAmt, optId: bet.optId };
+            const adjustedProbs = getAdjustedProbabilities(market, proxyBet);
             const currentProb = adjustedProbs[bet.optId] || 1;
-            const rawValue = bet.amount * (currentProb / (bet.buyProb || 1));
-            let refund = Math.floor(rawValue * 0.97);
-            if(refund < 0) refund = 1;
+            const rawValue = sellAmt * (currentProb / (bet.buyProb || 1));
+            let refund = Math.max(1, Math.floor(rawValue * 0.97));
 
             state.currentUser.points += refund;
-            market.volume = Math.max(1, market.volume - refund);
+            market.volume = Math.max(0, market.volume - sellAmt);
             const opt = market.options.find(o => o.id === bet.optId);
-            opt.shares = Math.max(1, opt.shares - refund);
+            opt.shares = Math.max(0, opt.shares - sellAmt);
 
             const newProbs = getProbabilities(market);
-            const now = new Date();
-            const timeStr = now.getHours() + ':' + String(now.getMinutes()).padStart(2, '0');
-            const historyEntry = { time: timeStr };
-            Object.keys(newProbs).forEach(k => { historyEntry[k] = newProbs[k] });
-            market.history.push(historyEntry);
-            market.bets.splice(betIndex, 1);
-            
+            market.history.push({ time: new Date().toISOString(), ...newProbs });
+
+            if (sellAmt >= bet.amount) {
+                market.bets.splice(betIndex, 1);
+            } else {
+                bet.amount -= sellAmt;
+            }
+
+            addLocalTx(state.currentUser, `Revente dans '${market.title}'`, refund);
+            state.data.users[state.currentUser.id].points = state.currentUser.points;
             saveDataLocal();
-            ui.showToast(`Vous avez retiré votre liquidité (${refund} points).`);
+            ui.showToast(`Revente effectuée : +${refund} points.`);
         }
-        
+
         updateNavbar();
         app.navigate('market', marketId);
     },
@@ -446,29 +501,6 @@ const app = {
         }
     },
 
-    claimDaily: async () => {
-        if(state.useApi) {
-            try {
-                const res = await apiCall('POST', '/api/auth/daily-claim');
-                state.currentUser = res.user;
-                ui.showToast("+5 points récupérés !");
-                updateNavbar();
-                app.navigate('dashboard');
-            } catch(e) {
-                ui.showToast(e.message, 'error');
-            }
-        } else {
-            const today = new Date().toISOString().split('T')[0];
-            if(state.currentUser.lastClaim === today) return ui.showToast("Déjà récupéré aujourd'hui", "error");
-            state.currentUser.lastClaim = today;
-            state.currentUser.points += 5;
-            saveDataLocal();
-            ui.showToast("+5 points récupérés !");
-            updateNavbar();
-            app.navigate('dashboard');
-        }
-    },
-
     // ADMIN
     approveUser: async (id) => {
         if(state.useApi) {
@@ -494,26 +526,118 @@ const app = {
 
     grantPoints: (userId) => {
         ui.showModal(
-            "<i class='fa-solid fa-coins'></i> Assigner des points",
+            "<i class='fa-solid fa-coins'></i> Modifier les points",
             `
+            <p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:1rem;">Entrez un montant positif pour créditer, ou négatif pour débiter (le solde ne peut pas passer sous 0).</p>
             <label style="display:block; margin-bottom:0.5rem; font-weight:500;">Montant de points :</label>
-            <input type="number" id="modalGrantPoints" style="width:100%; padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary);" placeholder="ex: 1000">
+            <input type="number" id="modalGrantPoints" style="width:100%; padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary);" placeholder="ex: 500 ou -200">
             `,
             async () => {
                 const amount = parseInt(document.getElementById('modalGrantPoints').value);
-                if (isNaN(amount) || amount <= 0) return ui.showToast("Montant invalide", "error");
+                if (isNaN(amount) || amount === 0) return ui.showToast("Montant invalide", "error");
                 
                 if(state.useApi) {
                     await apiCall('POST', `/api/admin/users/${userId}/grant`, {amount});
                 } else {
-                    state.data.users[userId].points += amount;
+                    const user = state.data.users[userId];
+                    user.points = Math.max(0, user.points + amount);
+                    addLocalTx(user, amount > 0 ? `Crédit admin : +${amount} pts` : `Débit admin : ${amount} pts`, amount);
+                    if(userId === state.currentUser.id) state.currentUser.points = user.points;
                     saveDataLocal();
+                }
+                updateNavbar();
+                ui.closeModal(true);
+                app.navigate('admin');
+                ui.showToast((amount > 0 ? '+' : '') + amount + " points appliqués.");
+            },
+            "Appliquer"
+        );
+    },
+
+    viewUserHistory: async (userId, userName) => {
+        let txs = [];
+        if (state.useApi) {
+            try {
+                txs = await apiCall('GET', `/api/users/${userId}/transactions`);
+            } catch(e) {
+                return ui.showToast(e.message, 'error');
+            }
+        } else {
+            txs = state.data.users[userId]?.transactions || [];
+        }
+        const rows = txs.length === 0
+            ? '<p style="color:var(--text-secondary);text-align:center;">Aucune transaction.</p>'
+            : txs.map(tx => formatTxRow(tx)).join('');
+        ui.showModal(
+            `<i class='fa-solid fa-clock-rotate-left'></i> Historique de ${userName}`,
+            `<div style="max-height:400px; overflow-y:auto;">${rows}</div>`,
+            () => {},
+            "Fermer"
+        );
+    },
+
+    toggleAdmin: async (userId) => {
+        if(state.currentUser.id !== 'admin') return;
+        if(state.useApi) {
+            await apiCall('POST', `/api/admin/users/${userId}/toggle-role`);
+        } else {
+            const user = state.data.users[userId];
+            user.role = user.role === 'admin' ? 'user' : 'admin';
+            saveDataLocal();
+        }
+        ui.showToast("Rôle mis à jour !");
+        app.navigate('admin');
+    },
+
+    createMarketDirect: () => {
+        ui.showModal(
+            "<i class='fa-solid fa-square-plus'></i> Créer un marché officiel",
+            `
+            <label style="display:block; margin-bottom:0.5rem; font-weight:500;">Titre du sondage / pari</label>
+            <input type="text" id="modalMarketTitle" style="width:100%; padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:1rem;" placeholder="Ex: Qui gagnera l'élection ?">
+            
+            <label style="display:block; margin-bottom:0.5rem; font-weight:500;">Choix possibles (séparés par des virgules)</label>
+            <input type="text" id="modalMarketChoices" style="width:100%; padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:1rem;" placeholder="Ex: Option A, Option B">
+
+            <label style="display:block; margin-bottom:0.5rem; font-weight:500;">Image d'illustration (URL)</label>
+            <input type="text" id="modalMarketImage" style="width:100%; padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary);" placeholder="https:// (optionnel)">
+            `,
+            async () => {
+                const title = document.getElementById('modalMarketTitle').value;
+                const choicesStr = document.getElementById('modalMarketChoices').value;
+                const imgIn = document.getElementById('modalMarketImage').value.trim();
+                const choices = choicesStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+                
+                if (!title) return ui.showToast("Le titre est requis.", "error");
+                if (choices.length < 2) return ui.showToast("Veuillez saisir au moins 2 options.", "error");
+
+                if (state.useApi) {
+                    try {
+                        await apiCall('POST', '/api/admin/markets', { title, choices, image: imgIn });
+                        ui.showToast("Marché créé !");
+                    } catch(e) {
+                        return ui.showToast(e.message, 'error');
+                    }
+                } else {
+                    const options = choices.map((c, i) => ({
+                        id: 'o' + (i+1), label: c, shares: 0, color: PALETTE[i % PALETTE.length]
+                    }));
+                    const initialProbs = {};
+                    options.forEach(o => initialProbs[o.id] = Math.round(100/choices.length));
+
+                    state.data.markets.push({
+                        id: 'm' + Date.now(), title: title, 
+                        image: imgIn || 'https://images.unsplash.com/photo-1550565118-3a14e8d0386f?auto=format&fit=crop&w=150&q=80',
+                        volume: 0, status: 'open', resolvedWinner: null, bets: [], options: options,
+                        history: [{ time: 'Début', ...initialProbs }]
+                    });
+                    saveDataLocal();
+                    ui.showToast("Marché créé !");
                 }
                 ui.closeModal(true);
                 app.navigate('admin');
-                ui.showToast(amount + " points accordés.");
             },
-            "Accorder"
+            "Mettre en ligne"
         );
     },
 
@@ -530,7 +654,7 @@ const app = {
             p.status = 'approved';
             
             const options = p.choices.map((c, i) => ({
-                id: 'o' + (i+1), label: c, shares: 100, color: PALETTE[i % PALETTE.length]
+                id: 'o' + (i+1), label: c, shares: 0, color: PALETTE[i % PALETTE.length]
             }));
             const initialProbs = {};
             options.forEach(o => initialProbs[o.id] = Math.round(100/p.choices.length));
@@ -587,18 +711,36 @@ const app = {
 
             if (winnerId === 'cancelled') {
                 market.bets.forEach(b => {
-                    if (state.data.users[b.userId]) state.data.users[b.userId].points += b.amount;
-                });
-            } else {
-                const winningOpt = market.options.find(o => o.id === winnerId);
-                const totalPool = market.volume;
-                const winningPool = winningOpt.shares;
-                market.bets.forEach(b => {
-                    if (b.optId === winnerId && state.data.users[b.userId]) {
-                        const sharePercent = b.amount / winningPool;
-                        state.data.users[b.userId].points += Math.floor(sharePercent * totalPool);
+                    if (state.data.users[b.userId]) {
+                        state.data.users[b.userId].points += b.amount;
+                        addLocalTx(state.data.users[b.userId], `Remboursement annulation '${market.title}'`, b.amount);
                     }
                 });
+            } else {
+                // Pari Mutuel pur sur les VRAIES mises uniquement
+                const realTotalPool = market.bets.reduce((s, b) => s + b.amount, 0);
+                const realWinningPool = market.bets.filter(b => b.optId === winnerId).reduce((s, b) => s + b.amount, 0);
+
+                if (realWinningPool === 0) {
+                    market.bets.forEach(b => {
+                        if (state.data.users[b.userId]) {
+                            state.data.users[b.userId].points += b.amount;
+                            addLocalTx(state.data.users[b.userId], `Remboursement (aucun gagnant) '${market.title}'`, b.amount);
+                        }
+                    });
+                } else {
+                    market.bets.forEach(b => {
+                        if (state.data.users[b.userId]) {
+                            if (b.optId === winnerId) {
+                                const payout = Math.max(0, Math.floor((b.amount / realWinningPool) * realTotalPool));
+                                state.data.users[b.userId].points += payout;
+                                addLocalTx(state.data.users[b.userId], `Gain '${market.title}'`, payout);
+                            } else {
+                                addLocalTx(state.data.users[b.userId], `Pari perdu '${market.title}'`, 0);
+                            }
+                        }
+                    });
+                }
             }
             saveDataLocal();
             ui.showToast("Marché clôturé !");
@@ -634,6 +776,185 @@ const app = {
             saveDataLocal();
         }
         app.navigate('admin');
+    },
+
+    deleteMarket: async (marketId) => {
+        if (!confirm("Voulez-vous vraiment supprimer ce marché définitivement ?")) return;
+        if(state.useApi) {
+            try {
+                await apiCall('DELETE', `/api/admin/markets/${marketId}`);
+                ui.showToast("Marché supprimé.");
+            } catch(e) {
+                return ui.showToast(e.message, 'error');
+            }
+        } else {
+            state.data.markets = state.data.markets.filter(m => m.id !== marketId);
+            saveDataLocal();
+            ui.showToast("Marché supprimé.");
+        }
+        app.navigate('admin');
+    },
+
+    changePassword: async () => {
+        const oldPass = document.getElementById('oldPass')?.value;
+        const newPass = document.getElementById('newPass')?.value;
+        const newPass2 = document.getElementById('newPass2')?.value;
+
+        if (!oldPass || !newPass || !newPass2) return ui.showToast('Veuillez remplir tous les champs.', 'error');
+        if (newPass !== newPass2) return ui.showToast('Les nouveaux mots de passe ne correspondent pas.', 'error');
+        if (newPass.length < 3) return ui.showToast('Le nouveau mot de passe est trop court.', 'error');
+
+        if (state.useApi) {
+            try {
+                await apiCall('POST', '/api/auth/change-password', { oldPassword: oldPass, newPassword: newPass });
+                ui.showToast('Mot de passe chang\u00e9 avec succ\u00e8s !');
+            } catch(e) {
+                return ui.showToast(e.message, 'error');
+            }
+        } else {
+            if (state.currentUser.password !== oldPass) return ui.showToast('Ancien mot de passe incorrect.', 'error');
+            state.currentUser.password = newPass;
+            state.data.users[state.currentUser.id].password = newPass;
+            saveDataLocal();
+            ui.showToast('Mot de passe chang\u00e9 avec succ\u00e8s !');
+        }
+        document.getElementById('oldPass').value = '';
+        document.getElementById('newPass').value = '';
+        document.getElementById('newPass2').value = '';
+    },
+
+    toggleChart: () => {
+        state.chartHidden = !state.chartHidden;
+        localStorage.setItem('chartHidden', state.chartHidden ? '1' : '0');
+        const wrapper = document.getElementById('chartWrapper');
+        const btn = document.getElementById('chartToggleBtn');
+        if (wrapper) wrapper.style.display = state.chartHidden ? 'none' : '';
+        if (btn) btn.innerHTML = state.chartHidden
+            ? '<i class="fa-solid fa-chart-line"></i> Afficher le graphe'
+            : '<i class="fa-solid fa-eye-slash"></i> Masquer le graphe';
+        if (!state.chartHidden) setTimeout(() => initChart(state.currentMarketId), 10);
+    },
+
+    deleteUser: async (userId, userName) => {
+        if (!confirm(`Supprimer définitivement le compte de "${userName}" ? Cette action est irréversible.`)) return;
+        if (state.useApi) {
+            try {
+                await apiCall('DELETE', `/api/admin/users/${userId}`);
+                ui.showToast('Compte supprimé.');
+            } catch(e) {
+                return ui.showToast(e.message, 'error');
+            }
+        } else {
+            delete state.data.users[userId];
+            saveDataLocal();
+            ui.showToast('Compte supprimé.');
+        }
+        app.navigate('admin');
+    },
+
+    claimDaily: async () => {
+        if (state.useApi) {
+            try {
+                const res = await apiCall('POST', '/api/auth/daily-claim');
+                state.currentUser = res.user;
+                ui.showToast('\uD83C\uDF81 +5 points r\u00e9cup\u00e9r\u00e9s ! Revenez demain.');
+            } catch(e) {
+                return ui.showToast(e.message, 'error');
+            }
+        } else {
+            const today = new Date().toISOString().slice(0, 10);
+            if (state.currentUser.lastClaim === today) {
+                return ui.showToast('Bonus d\u00e9j\u00e0 r\u00e9cup\u00e9r\u00e9 aujourd\u2019hui !', 'error');
+            }
+            state.currentUser.lastClaim = today;
+            state.currentUser.points += 5;
+            state.data.users[state.currentUser.id].lastClaim = today;
+            state.data.users[state.currentUser.id].points += 5;
+            addLocalTx(state.currentUser, 'Bonus quotidien', 5);
+            saveDataLocal();
+            ui.showToast('\uD83C\uDF81 +5 points r\u00e9cup\u00e9r\u00e9s ! Revenez demain.');
+        }
+        updateNavbar();
+        app.navigate('dashboard');
+    },
+
+    switchTab: (tab) => {
+        state.dashTab = tab;
+        const container = document.getElementById('app-container');
+        if (container) container.innerHTML = renderDashboard();
+    },
+
+    requestNameChange: () => {
+        const pending = state.data.nameChangeRequests?.some(r => r.status === 'pending');
+        if (pending) return ui.showToast('Vous avez déjà une demande en attente.', 'error');
+        ui.showModal(
+            "<i class='fa-solid fa-pen'></i> Changer mon nom affiché",
+            `<p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:1rem;">Ce changement doit être validé par un admin. Votre nom actuel : <strong>${state.currentUser.name}</strong></p>
+            <label style="display:block; margin-bottom:0.5rem; font-weight:500;">Nouveau nom affiché :</label>
+            <input type="text" id="modalNewName" style="width:100%; padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary);" placeholder="Ex: Jean-Pierre">`,
+            async () => {
+                const newName = document.getElementById('modalNewName').value.trim();
+                if (!newName || newName.length < 2) return ui.showToast('Nom trop court.', 'error');
+                if (state.useApi) {
+                    try {
+                        await apiCall('POST', '/api/profile/request-name-change', { newName });
+                        ui.showToast('Demande envoyée ! Un admin la traitera bientôt.');
+                    } catch(e) { return ui.showToast(e.message, 'error'); }
+                } else {
+                    ui.showToast('Demande envoyée ! (Mode local : changement immédiat)');
+                    state.currentUser.name = newName;
+                    state.data.users[state.currentUser.id].name = newName;
+                    saveDataLocal();
+                    updateNavbar();
+                }
+                ui.closeModal(true);
+                app.navigate('profile');
+            },
+            'Envoyer la demande'
+        );
+    },
+
+    approveNameChange: async (reqId) => {
+        if (state.useApi) {
+            try { await apiCall('POST', `/api/admin/name-change/${reqId}/approve`); }
+            catch(e) { return ui.showToast(e.message, 'error'); }
+        }
+        ui.showToast('Pseudonyme approuvé !');
+        app.navigate('admin');
+    },
+
+    rejectNameChange: async (reqId) => {
+        if (state.useApi) {
+            try { await apiCall('POST', `/api/admin/name-change/${reqId}/reject`); }
+            catch(e) { return ui.showToast(e.message, 'error'); }
+        }
+        ui.showToast('Demande rejetée.');
+        app.navigate('admin');
+    },
+
+    viewGrantsLog: async () => {
+        let logs = [];
+        if (state.useApi) {
+            try { logs = await apiCall('GET', '/api/admin/grants-log'); }
+            catch(e) { return ui.showToast(e.message, 'error'); }
+        }
+        if (logs.length === 0) {
+            return ui.showModal('<i class="fa-solid fa-list"></i> Journal des crédits', '<p style="color:var(--text-secondary)">Aucun crédit admin enregistré.</p>', () => {}, 'Fermer');
+        }
+        const rows = logs.map(l => {
+            const d = new Date(l.time);
+            const ds = d.toLocaleDateString('fr-FR') + ' ' + d.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+            const col = l.amount > 0 ? 'var(--yes-color)' : 'var(--no-color)';
+            return `<div class="user-row" style="flex-direction:column; align-items:flex-start; gap:0.2rem;">
+                <div style="display:flex; justify-content:space-between; width:100%">
+                    <span><strong>${l.adminName}</strong> → <strong>${l.targetName}</strong></span>
+                    <span style="color:${col}; font-weight:700">${l.amount > 0 ? '+' : ''}${l.amount} pts</span>
+                </div>
+                <div style="font-size:0.78rem; color:var(--text-secondary)">${ds}</div>
+            </div>`;
+        }).join('');
+        ui.showModal('<i class="fa-solid fa-list"></i> Journal des crédits admin',
+            `<div style="max-height:450px; overflow-y:auto;">${rows}</div>`, () => {}, 'Fermer');
     }
 };
 
@@ -667,6 +988,9 @@ function updateNavbar() {
         document.getElementById('userPoints').innerHTML = `<i class="fa-solid fa-coins"></i> ${Math.floor(state.currentUser.points)}`;
         
         userPill.classList.remove('hidden');
+        userPill.style.cursor = 'pointer';
+        userPill.onclick = () => app.navigate('profile');
+        
         logoutBtn.classList.remove('hidden');
         authActions.classList.add('hidden');
         
@@ -729,7 +1053,7 @@ function renderRegister() {
 function renderProposals() {
     if (!state.currentUser) return `<h1>Accès Refusé.</h1>`;
     
-    return `
+    let html = `
         <div style="margin-bottom: 2rem"><button class="btn-outline" onclick="app.navigate('dashboard')"><i class="fa-solid fa-arrow-left"></i> Retour</button></div>
         <h1 class="page-title"><i class="fa-solid fa-lightbulb"></i> Proposer un Pari</h1>
         <div style="display:flex; justify-content:center; gap: 2rem;">
@@ -750,11 +1074,14 @@ function renderProposals() {
             </div>
         </div>
     `;
+    return html;
 }
 
 function renderDashboard() {
+    const isLeaderboard = state.dashTab === 'leaderboard';
+
     let dailyBanner = '';
-    if (state.currentUser) {
+    if (!isLeaderboard && state.currentUser) {
         const today = new Date().toISOString().split('T')[0];
         if (state.currentUser.lastClaim !== today) {
             dailyBanner = `
@@ -766,30 +1093,174 @@ function renderDashboard() {
         }
     }
 
-    let html = dailyBanner + `
-        <div style="display: flex; justify-content: space-between; align-items: center">
-            <h1 class="page-title">Marchés Tendances</h1>
+    // ─── ONGLETS ───────────────────────────────────────────────────
+    const tabBar = dailyBanner + `
+        <div style="display:flex; gap:0; margin-bottom:2rem; border-bottom:2px solid var(--border-color);">
+            <button
+                onclick="app.switchTab('markets')"
+                style="padding:0.6rem 1.4rem; font-weight:700; font-size:0.95rem; border:none;
+                       background:none; cursor:pointer; transition:all 0.2s;
+                       color:${!isLeaderboard ? 'var(--accent-color)' : 'var(--text-secondary)'};
+                       border-bottom:${!isLeaderboard ? '3px solid var(--accent-color)' : '3px solid transparent'};
+                       margin-bottom:-2px;">
+                <i class="fa-solid fa-fire"></i> Paris
+            </button>
+            <button
+                onclick="app.switchTab('leaderboard')"
+                style="padding:0.6rem 1.4rem; font-weight:700; font-size:0.95rem; border:none;
+                       background:none; cursor:pointer; transition:all 0.2s;
+                       color:${isLeaderboard ? 'var(--accent-color)' : 'var(--text-secondary)'};
+                       border-bottom:${isLeaderboard ? '3px solid var(--accent-color)' : '3px solid transparent'};
+                       margin-bottom:-2px;">
+                <i class="fa-solid fa-trophy"></i> Classement
+            </button>
         </div>
-        ${state.useApi ? '<div style="margin-bottom:1rem; font-size:0.8rem; color:var(--yes-color)"><i class="fa-solid fa-server"></i> Connecté au serveur en direct</div>' : '<div style="margin-bottom:1rem; font-size:0.8rem; color:#ff9800"><i class="fa-solid fa-database"></i> Mode Local hors-ligne</div>'}
-        <div class="market-grid">
     `;
 
-    state.data.markets.forEach(m => {
+    // ─── ONGLET CLASSEMENT ─────────────────────────────────────────
+    if (isLeaderboard) {
+        let lb = state.leaderboard;
+        
+        // Fonction pour récupérer les points libres
+        const getFreePoints = (u) => {
+            return Math.max(0, Math.floor(u.points || 0));
+        };
+
+        if (!state.useApi || !lb || lb.length === 0) {
+            lb = Object.values(state.data.users)
+                .filter(u => u.status === 'active')
+                .sort((a, b) => getFreePoints(b) - getFreePoints(a))
+                .slice(0, 20)
+                .map(u => ({ id: u.id, name: u.name, points: getFreePoints(u) }));
+        }
+
+        // Rang de l'utilisateur courant (peut ne pas être dans le top 20)
+        let myRankHtml = '';
+        if (state.currentUser) {
+            const myRankIdx = lb.findIndex(u => u.id === state.currentUser.id);
+            if (myRankIdx === -1) {
+                // L'utilisateur n'est pas dans le top 20 : calculer son rang réel
+                const allSorted = Object.values(state.data.users)
+                    .filter(u => u.status === 'active')
+                    .sort((a, b) => getFreePoints(b) - getFreePoints(a));
+                const realRank = allSorted.findIndex(u => u.id === state.currentUser.id) + 1;
+                if (realRank > 0) {
+                    const myTotal = state.useApi ? 
+                        (state.leaderboard.find(u => u.id === state.currentUser.id)?.points || getFreePoints(state.currentUser)) : 
+                        getFreePoints(state.currentUser);
+                    myRankHtml = `
+                        <div style="margin-top:1rem; padding-top:1rem; border-top:2px dashed var(--border-color);">
+                            <div class="leaderboard-row me">
+                                <span class="leaderboard-rank" style="width:2rem;">#${realRank}</span>
+                                <span class="leaderboard-name">${state.currentUser.name} <span style="font-size:0.75rem;opacity:0.7">(moi)</span></span>
+                                <span class="leaderboard-pts">${myTotal} pts</span>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        const medals = ['🥇','🥈','🥉'];
+        const rows = lb.map((u, i) => {
+            const isMe = state.currentUser && u.id === state.currentUser.id;
+            const rank = i < 3 ? medals[i] : `#${i+1}`;
+            const rankClass = i < 3 ? ['top1','top2','top3'][i] : '';
+            return `
+                <div class="leaderboard-row ${isMe ? 'me' : ''}">
+                    <span class="leaderboard-rank ${rankClass}" style="width:2.5rem; font-size:${i<3?'1.1rem':'0.85rem'}">${rank}</span>
+                    <span class="leaderboard-name">${u.name}${isMe ? ' <span style="font-size:0.75rem;opacity:0.7">(moi)</span>' : ''}</span>
+                    <span class="leaderboard-pts">${u.points} pts</span>
+                </div>
+            `;
+        }).join('');
+
+        // Bonus quotidien
+        const today = new Date().toISOString().slice(0, 10);
+        const canClaim = state.currentUser && (state.currentUser.lastClaim || '') !== today;
+        const claimSection = state.currentUser ? `
+            <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--border-color);">
+                <button class="daily-claim-btn" ${canClaim ? '' : 'disabled'} onclick="app.claimDaily()">
+                    <i class="fa-solid fa-gift"></i>
+                    ${canClaim ? "R\u00e9cup\u00e9rer mes +5 pts du jour" : "Bonus d\u00e9j\u00e0 r\u00e9cup\u00e9r\u00e9 aujourd\u2019hui \u2714"}
+                </button>
+            </div>
+        ` : '';
+
+        const leaderboardContent = `
+            <div style="max-width:640px; margin:0 auto;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+                    <h2 style="font-size:1.3rem; font-weight:700; color:var(--text-primary);">
+                        <i class="fa-solid fa-trophy" style="color:#fbbf24;"></i> Top 20
+                    </h2>
+                    <span style="font-size:0.8rem; color:var(--text-secondary);">Points totaux</span>
+                </div>
+                <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius-lg); overflow:hidden; padding:0.5rem;">
+                    ${lb.length === 0
+                        ? '<p style="padding:1rem;color:var(--text-secondary);">Aucun joueur pour le moment.</p>'
+                        : rows}
+                    ${myRankHtml}
+                </div>
+                ${claimSection}
+            </div>
+        `;
+
+        return `<div>${tabBar}${leaderboardContent}</div>`;
+    }
+
+    // ─── ONGLET PARIS ──────────────────────────────────────────────
+    // Restriction : non-connectés ne voient pas les paris
+    if (!state.currentUser) {
+        return `<div>${tabBar}<div style="max-width:480px; margin:4rem auto; text-align:center; background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius-lg); padding:2.5rem;">
+            <i class="fa-solid fa-lock" style="font-size:2.5rem; color:var(--accent-color); margin-bottom:1rem; display:block;"></i>
+            <h2 style="margin-bottom:0.75rem;">Accès réservé</h2>
+            <p style="color:var(--text-secondary); margin-bottom:1.5rem;">Connectez-vous pour voir les paris en cours et y participer.</p>
+            <div style="display:flex; gap:1rem; justify-content:center;">
+                <button class="btn-primary" onclick="app.navigate('login')">Se connecter</button>
+                <button class="btn-outline" onclick="app.navigate('register')">S'inscrire</button>
+            </div>
+        </div></div>`;
+    }
+
+    const allMarkets = [...state.data.markets].reverse();
+    const openMarkets = allMarkets.filter(m => m.status !== 'resolved');
+    const closedMarkets = allMarkets.filter(m => m.status === 'resolved');
+
+    const myBetMarketIds = new Set();
+    if (state.currentUser) {
+        state.data.markets.forEach(m => {
+            if (m.bets.some(b => b.userId === state.currentUser.id))
+                myBetMarketIds.add(m.id);
+        });
+    }
+
+    function renderMarketCard(m) {
+        const hasMyBet = myBetMarketIds.has(m.id);
         const probs = getProbabilities(m);
         const sortedOpts = [...m.options].sort((a,b) => probs[b.id] - probs[a.id]);
-        
         let probsHtml = '';
         sortedOpts.slice(0, 3).forEach(opt => {
             probsHtml += `
-                <div style="display: flex; justify-content: space-between; margin-bottom: 0.2rem; font-size: 0.85rem; font-weight: 600;">
-                    <span style="color: ${opt.color}">${opt.label}</span>
-                    <span style="color: var(--text-primary)">${probs[opt.id]}%</span>
+                <div style="display:flex; justify-content:space-between; margin-bottom:0.2rem; font-size:0.85rem; font-weight:600;">
+                    <span style="color:${opt.color}">${opt.label}</span>
+                    <span style="color:var(--text-primary)">${probs[opt.id]}%</span>
                 </div>
             `;
         });
-
-        html += `
-            <div class="market-card" onclick="app.navigate('market', '${m.id}')">
+        // Badge "Ma mise" injecté directement dans le HTML
+        const myBetBadge = hasMyBet
+            ? `<span style="display:inline-block; font-size:0.7rem; font-weight:700;
+                           padding:0.15rem 0.45rem; border-radius:20px;
+                           background:var(--accent-color); color:white;
+                           margin-left:0.5rem; vertical-align:middle;">
+                   💰 Ma mise
+               </span>`
+            : '';
+        const cardStyle = hasMyBet
+            ? `border:2px solid var(--accent-color); box-shadow:0 0 0 3px var(--accent-transparent);`
+            : '';
+        return `
+            <div class="market-card" style="${cardStyle}" onclick="app.navigate('market', '${m.id}')">
                <div class="market-card-header">
                     <div class="market-icon"><img src="${m.image}" alt=""></div>
                     <div style="display:flex; flex-direction:column; align-items:flex-end;">
@@ -798,16 +1269,33 @@ function renderDashboard() {
                         <span class="market-volume"><i class="fa-solid fa-chart-simple"></i> Vol: ${m.volume} pts</span>
                     </div>
                 </div>
-                <h3 class="market-title">${m.title}</h3>
-                <div style="margin-top: 0.5rem">
-                    ${probsHtml}
-                </div>
+                <h3 class="market-title">${m.title}${myBetBadge}</h3>
+                <div style="margin-top:0.5rem">${probsHtml}</div>
             </div>
         `;
-    });
+    }
 
-    html += `</div>`;
-    return html;
+    const modeIndicator = state.useApi
+        ? '<div style="margin-bottom:1rem; font-size:0.8rem; color:var(--yes-color)"><i class="fa-solid fa-server"></i> Connecté au serveur</div>'
+        : '<div style="margin-bottom:1rem; font-size:0.8rem; color:#ff9800"><i class="fa-solid fa-database"></i> Mode local</div>';
+
+    let marketsHtml = modeIndicator;
+    marketsHtml += `<h2 style="font-size:1.1rem; font-weight:700; margin-bottom:1rem; color:var(--text-primary);"><i class="fa-solid fa-fire" style="color:var(--accent-color);"></i> Paris en cours</h2>`;
+    if (openMarkets.length === 0) {
+        marketsHtml += `<p style="color:var(--text-secondary); margin-bottom:2rem;">Aucun pari en cours pour le moment.</p>`;
+    } else {
+        marketsHtml += `<div class="market-grid">`;
+        openMarkets.forEach(m => { marketsHtml += renderMarketCard(m); });
+        marketsHtml += `</div>`;
+    }
+    if (closedMarkets.length > 0) {
+        marketsHtml += `<h2 style="font-size:1rem; font-weight:700; margin-top:2.5rem; margin-bottom:1rem; color:var(--text-secondary);"><i class="fa-solid fa-flag-checkered"></i> Paris clôturés</h2>`;
+        marketsHtml += `<div class="market-grid">`;
+        closedMarkets.forEach(m => { marketsHtml += renderMarketCard(m); });
+        marketsHtml += `</div>`;
+    }
+
+    return `<div>${tabBar}${marketsHtml}</div>`;
 }
 
 function renderMarket(id) {
@@ -819,6 +1307,13 @@ function renderMarket(id) {
     let tabsHtml = '';
     m.options.forEach(opt => {
         const isActive = state.selectedOptionId === opt.id;
+        // Stats par option
+        const optBets = m.bets.filter(b => b.optId === opt.id);
+        const optTotal = optBets.reduce((s, b) => s + b.amount, 0);
+        const optInvestors = new Set(optBets.map(b => b.userId)).size;
+        const statsLabel = optTotal > 0
+            ? `<span style="display:block; font-size:0.68rem; opacity:0.85; margin-top:0.15rem;">${optTotal} pts • ${optInvestors} inv.</span>`
+            : '';
         tabsHtml += `
             <div class="trade-tab ${isActive ? 'active' : ''}" 
                  style="background: ${isActive ? opt.color : 'transparent'}; 
@@ -828,6 +1323,7 @@ function renderMarket(id) {
                         opacity: ${isActive ? '1' : '0.7'}; cursor: pointer;"
                  onclick="app.selectOption('${opt.id}')">
                 ${opt.label} ${probs[opt.id]}%
+                ${statsLabel}
             </div>
         `;
     });
@@ -878,22 +1374,40 @@ function renderMarket(id) {
                 <div style="display: flex; flex-direction: column; gap: 0.75rem;">`;
             myBets.forEach(b => {
                 const opt = m.options.find(o => o.id === b.optId);
-                const currentProb = getAdjustedProbabilities(m, b)[b.optId] || 1;
+                const proxyBet = { amount: b.amount, optId: b.optId };
+                const currentProb = getAdjustedProbabilities(m, proxyBet)[b.optId] || 1;
                 const rawValue = b.amount * (currentProb / (b.buyProb || 1));
                 const cashoutVal = Math.floor(rawValue * 0.97);
                 const pnl = cashoutVal - b.amount;
                 const pnlColor = pnl > 0 ? 'var(--yes-color)' : (pnl < 0 ? 'var(--no-color)' : 'var(--text-secondary)');
+                const inputId = `sellAmt_${b.id}`;
 
-                let sellBtn = m.status === 'open' ? `<button class="btn-outline" style="font-size:0.8rem; padding: 0.25rem 0.5rem; border-color:${pnl>0?'var(--yes-color)':'var(--border-color)'}" onclick="app.cashOutBet('${m.id}', '${b.id}')">Revendre pour ${cashoutVal}pts</button>` : '';
+                let sellSection = '';
+                if (m.status === 'open') {
+                    sellSection = `
+                        <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-top:0.5rem;">
+                            <input type="number" id="${inputId}" min="1" max="${b.amount}" value="${b.amount}"
+                                style="width:80px; padding:0.3rem 0.5rem; border-radius:var(--radius-sm); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); font-size:0.85rem;"
+                                placeholder="Qté">
+                            <span style="font-size:0.8rem; color:var(--text-secondary);">/ ${b.amount} pts</span>
+                            <button class="btn-outline" style="font-size:0.8rem; padding:0.3rem 0.6rem; border-color:${pnl>0?'var(--yes-color)':'var(--border-color)'}"
+                                onclick="app.cashOutBet('${m.id}', '${b.id}', parseInt(document.getElementById('${inputId}').value) || ${b.amount})">
+                                <i class="fa-solid fa-money-bill-transfer"></i> Revendre
+                            </button>
+                        </div>`;
+                }
 
                 portfolioHtml += `
-                    <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-card); padding: 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
-                        <div>
-                            <span style="font-weight:bold; color:${opt.color}; text-shadow:0 1px 2px rgba(0,0,0,0.1)">${opt.label}</span>
-                            <span style="font-size:0.8rem; color:var(--text-secondary); margin-left:0.5rem">Mise: ${b.amount} pts</span>
-                            <span style="font-size:0.8rem; margin-left:0.5rem; color:${pnlColor}; font-weight:bold">Profit estimé : ${pnl > 0 ? '+' : ''}${pnl} pts</span>
+                    <div style="background: var(--bg-card); padding: 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div>
+                                <span style="font-weight:bold; color:${opt.color}; text-shadow:0 1px 2px rgba(0,0,0,0.1)">${opt.label}</span>
+                                <span style="font-size:0.8rem; color:var(--text-secondary); margin-left:0.5rem">Mise: ${b.amount} pts</span>
+                                <span style="font-size:0.8rem; margin-left:0.5rem; color:${pnlColor}; font-weight:bold">P&L: ${pnl > 0 ? '+' : ''}${pnl} pts</span>
+                            </div>
+                            <span style="font-size:0.78rem; color:var(--text-secondary);">Valeur: ~${cashoutVal} pts</span>
                         </div>
-                        ${sellBtn}
+                        ${sellSection}
                     </div>
                 `;
             });
@@ -908,12 +1422,20 @@ function renderMarket(id) {
         
         <div class="detail-layout">
             <div class="chart-section">
-                <div class="chart-header">
-                    <img src="${m.image}" alt="" style="width: 64px; height: 64px; border-radius: 8px;">
-                    <h1 style="font-size: 1.5rem">${m.title}</h1>
+                <div class="chart-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem;">
+                    <div style="display:flex; align-items:center; gap:1rem;">
+                        <img src="${m.image}" alt="" style="width: 56px; height: 56px; border-radius: 8px; flex-shrink:0;">
+                        <h1 style="font-size: 1.3rem; line-height:1.3;">${m.title}</h1>
+                    </div>
+                    <button class="chart-toggle-btn" onclick="app.toggleChart()" id="chartToggleBtn">
+                        ${state.chartHidden ? '<i class="fa-solid fa-chart-line"></i> Afficher' : '<i class="fa-solid fa-eye-slash"></i> Masquer'} le graphe
+                    </button>
                 </div>
-                <div style="flex:1; width:100%; min-height: 300px; position:relative">
+                <div id="chartWrapper" style="width:100%; height: 320px; position:relative; ${state.chartHidden ? 'display:none' : ''}">
                     <canvas id="marketChart"></canvas>
+                    <div style="font-size:0.75rem; color:var(--text-secondary); text-align:center; margin-top:0.5rem; opacity:0.8;">
+                        <i class="fa-solid fa-eye"></i> Astuce : Cliquez sur les noms dans la légende ci-dessus pour masquer ou afficher une courbe spécifique.
+                    </div>
                 </div>
             </div>
 
@@ -961,7 +1483,16 @@ function renderAdmin() {
                         <span style="color: var(--text-secondary); margin-left:1rem"><i class="fa-solid fa-coins"></i> ${Math.floor(u.points)} pts</span>
                         <br><span style="font-size: 0.8rem; color: var(--text-secondary)">${details}</span>
                     </div>
-                    <button class="btn-outline" onclick="app.grantPoints('${u.id}')"><i class="fa-solid fa-plus"></i> Points</button>
+                    <div style="display:flex; gap:0.5rem; flex-wrap:wrap; justify-content:flex-end;">
+                        <button class="btn-outline" onclick="app.grantPoints('${u.id}')"><i class="fa-solid fa-coins"></i> Points</button>
+                        <button class="btn-outline" onclick="app.viewUserHistory('${u.id}', '${u.name}')"><i class="fa-solid fa-clock-rotate-left"></i></button>
+                        ${state.currentUser.id === 'admin' && u.id !== 'admin' ? 
+                            `<button class="btn-outline" onclick="app.toggleAdmin('${u.id}')"><i class="fa-solid fa-star"></i> ${u.role === 'admin' ? 'Retirer Admin' : 'Nommer Admin'}</button>` 
+                            : ''}
+                        ${state.currentUser.id === 'admin' && u.id !== 'admin' ?
+                            `<button class="btn-outline" style="color:#ef4444;border-color:#ef4444" onclick="app.deleteUser('${u.id}', '${u.name}')"><i class="fa-solid fa-user-slash"></i></button>`
+                            : ''}
+                    </div>
                 </div>
             `;
         }
@@ -980,6 +1511,8 @@ function renderAdmin() {
         } else if (m.status === 'paused') {
             btns = `<button class="btn-outline" style="margin-right: 0.5rem" onclick="app.togglePause('${m.id}')">Débloquer</button>
                     <button class="btn-primary" onclick="app.resolveMarketPrompt('${m.id}')">Clôturer</button>`;
+        } else if (m.status === 'resolved') {
+            btns = `<button class="btn-outline" style="color:var(--error-color); border-color:var(--error-color);" onclick="app.deleteMarket('${m.id}')"><i class="fa-solid fa-trash"></i> Supprimer</button>`;
         }
 
         adminMarketsHtml += `
@@ -1021,15 +1554,41 @@ function renderAdmin() {
             ${pendingUsers === '' ? '<p>Aucune inscription en attente.</p>' : `<div class="users-list">${pendingUsers}</div>`}
         </div>
 
+        ${(() => {
+            const ncReqs = state.data.nameChangeRequests || [];
+            if (ncReqs.length === 0) return '';
+            const ncHtml = ncReqs.map(r => `
+                <div class="user-row" style="border-color:#a855f7; flex-direction:column; align-items:stretch; gap:0.4rem;">
+                    <div><strong>${r.oldName}</strong> <i class="fa-solid fa-arrow-right" style="color:var(--text-secondary)"></i> <strong style="color:#a855f7">${r.newName}</strong></div>
+                    <div style="display:flex; justify-content:flex-end; gap:0.5rem;">
+                        <button class="btn-outline" onclick="app.rejectNameChange('${r.id}')">Rejeter</button>
+                        <button class="btn-primary" style="background:#a855f7" onclick="app.approveNameChange('${r.id}')">Approuver</button>
+                    </div>
+                </div>`).join('');
+            return `<div class="admin-card" style="background:rgba(168,85,247,0.08); border-color:#a855f7;">
+                <h2 class="admin-header" style="color:#a855f7;"><i class="fa-solid fa-pen"></i> Demandes de pseudonyme</h2>
+                <div class="users-list">${ncHtml}</div>
+            </div>`;
+        })()}
+
         <div class="admin-card">
             <h2 class="admin-header"><i class="fa-solid fa-chart-pie"></i> Marchés Actifs</h2>
+            <button class="btn-primary" style="margin-bottom:1rem" onclick="app.createMarketDirect()">+ Créer un Marché Officiel</button>
             <div class="users-list">${adminMarketsHtml}</div>
         </div>
 
         <div class="admin-card">
-            <h2 class="admin-header"><i class="fa-solid fa-users"></i> Membres Actifs & Points</h2>
+            <h2 class="admin-header"><i class="fa-solid fa-users"></i> Membres Actifs &amp; Points</h2>
             <div class="users-list">${activeUsers}</div>
         </div>
+
+        ${state.currentUser.id === 'admin' ? `
+        <div class="admin-card" style="background:rgba(239,68,68,0.07); border-color:#ef4444;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h2 class="admin-header" style="color:#ef4444; margin:0;"><i class="fa-solid fa-receipt"></i> Journal des crédits admin</h2>
+                <button class="btn-outline" style="border-color:#ef4444; color:#ef4444" onclick="app.viewGrantsLog()"><i class="fa-solid fa-eye"></i> Voir le journal</button>
+            </div>
+        </div>` : ''}
     `;
 }
 
@@ -1044,32 +1603,98 @@ function initChart(marketId) {
     const ctx = canvas.getContext('2d');
     const market = state.data.markets.find(m => m.id === marketId);
     const isDark = state.theme === 'dark';
-    
+
+    // Formater les labels : ISO -> timestamp (pour axe X linéaire)
+    // Trouver le premier timestamp valide pour avoir une base de temps
+    let firstValidMs = null;
+    for (let h of market.history) {
+        if (h.time && (h.time.includes('T') || h.time.includes('-'))) {
+            const ms = new Date(h.time).getTime();
+            if (!isNaN(ms)) { firstValidMs = ms; break; }
+        } else if (h.time && /^\d{1,2}:\d{2}$/.test(h.time)) {
+            const [hh, mm] = h.time.split(':');
+            const d = new Date();
+            d.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
+            let ms = d.getTime();
+            // Eviter que l'heure parsée ne soit dans le futur (ex: bet fait hier à 23h, parsé aujourd'hui)
+            while (ms > Date.now()) ms -= 24 * 3600 * 1000;
+            firstValidMs = ms;
+            break;
+        }
+    }
+    if (!firstValidMs) firstValidMs = Date.now();
+
+    // On s'assure que le temps ne va jamais en arrière
+    let currentMs = firstValidMs - (market.history.length * 60000); // base reculée d'une minute par entrée
+    const historyData = market.history.map((h) => {
+        let parsedMs = null;
+        if (h.time) {
+            if (h.time.includes('T') || h.time.includes('-')) {
+                parsedMs = new Date(h.time).getTime();
+            } else if (/^\d{1,2}:\d{2}$/.test(h.time)) {
+                const [hh, mm] = h.time.split(':');
+                const d = new Date();
+                d.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
+                parsedMs = d.getTime();
+                // Si l'heure parsée est dans le futur par rapport à maintenant, c'est qu'elle date d'un jour précédent
+                while (parsedMs > Date.now()) {
+                    parsedMs -= 24 * 3600 * 1000;
+                }
+            }
+        }
+        
+        if (parsedMs && !isNaN(parsedMs) && parsedMs >= currentMs) {
+            currentMs = parsedMs;
+        } else {
+            // Fallback si non parsable ou si la date recule dans le temps (pour forcer un ordre strictement croissant)
+            currentMs += 1000; 
+        }
+        return { ...h, xVal: currentMs };
+    });
+
     const currentProbs = getProbabilities(market);
     // Sort options by probability ascending, so the one with the highest probability is drawn last (on top)
     const sortedOptions = [...market.options].sort((a, b) => currentProbs[a.id] - currentProbs[b.id]);
 
     const datasets = sortedOptions.map(opt => ({
         label: opt.label,
-        data: market.history.map(h => h[opt.id]),
+        data: historyData.map(h => ({ x: h.xVal, y: h[opt.id] })),
         borderColor: opt.color,
-        backgroundColor: 'transparent',
-        borderWidth: 4,
-        tension: 0.4,
-        pointRadius: 5,
-        pointHoverRadius: 8
+        backgroundColor: opt.color,
+        borderWidth: 3,
+        stepped: true,
+        pointRadius: 1,
+        pointHoverRadius: 4
     }));
 
     currentChart = new Chart(ctx, {
         type: 'line',
-        data: { labels: market.history.map(h => h.time), datasets: datasets },
+        data: { datasets: datasets },
         options: {
             responsive: true, maintainAspectRatio: false,
             plugins: {
                 legend: { labels: { color: isDark ? '#a0a0a0' : '#666666' } },
                 tooltip: {
                     mode: 'index', intersect: false,
-                    callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y}%` }
+                    callbacks: {
+                        title: (tooltipItems) => {
+                            if (!tooltipItems.length) return '';
+                            const d = new Date(tooltipItems[0].parsed.x);
+                            return d.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit' }) + ' ' + d.toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+                        },
+                        label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y}%`
+                    }
+                },
+                zoom: {
+                    pan: {
+                        enabled: true,
+                        mode: 'x'
+                    },
+                    zoom: {
+                        wheel: { enabled: true },
+                        pinch: { enabled: true },
+                        mode: 'x'
+                    }
                 }
             },
             scales: {
@@ -1078,13 +1703,129 @@ function initChart(marketId) {
                     grid: { color: isDark ? '#333333' : '#e5e5e5' },
                     ticks: { color: isDark ? '#a0a0a0' : '#666666', callback: v => v + '%' }
                 },
-                x: { grid: { display: false }, ticks: { color: isDark ? '#a0a0a0' : '#666666' } }
+                x: {
+                    type: 'linear',
+                    grid: { display: false },
+                    ticks: {
+                        color: isDark ? '#a0a0a0' : '#666666',
+                        maxRotation: 30, maxTicksLimit: 10,
+                        callback: function(value) {
+                            const d = new Date(value);
+                            return d.toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+                        }
+                    }
+                }
             },
             interaction: { mode: 'nearest', axis: 'x', intersect: false }
         }
     });
 
     app.updateGainEstimate();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE PROFIL
+// ─────────────────────────────────────────────────────────────────────────────
+function renderProfile() {
+    if (!state.currentUser) return renderLogin();
+    const u = state.currentUser;
+    const txs = (state.useApi ? [] : (u.transactions || []));
+
+    // Si on est en mode API, on charge les transactions asynchronement
+    if (state.useApi) {
+        fetch(`/api/users/${u.id}/transactions`)
+            .then(r => r.json())
+            .then(data => {
+                const list = document.getElementById('txList');
+                if (!list) return;
+                list.innerHTML = data.length === 0
+                    ? '<p style="color:var(--text-secondary);text-align:center;">Aucune transaction pour le moment.</p>'
+                    : data.map(tx => formatTxRow(tx)).join('');
+            }).catch(() => {});
+    }
+
+    const txHtml = state.useApi
+        ? '<p style="color:var(--text-secondary);text-align:center;"><i class="fa-solid fa-spinner fa-spin"></i> Chargement...</p>'
+        : (txs.length === 0
+            ? '<p style="color:var(--text-secondary);text-align:center;">Aucune transaction pour le moment.</p>'
+            : txs.map(tx => formatTxRow(tx)).join(''));
+
+    return `
+        <div style="margin-bottom: 2rem">
+            <button class="btn-outline" onclick="app.navigate('dashboard')">
+                <i class="fa-solid fa-arrow-left"></i> Retour
+            </button>
+        </div>
+
+        <h1 class="page-title"><i class="fa-solid fa-circle-user"></i> Mon Profil</h1>
+
+        <div class="admin-card">
+            <h2 class="admin-header"><i class="fa-solid fa-id-card"></i> Informations</h2>
+            <div class="user-row" style="flex-direction:column; align-items:flex-start; gap:0.4rem;">
+                <div><strong>Nom :</strong> ${u.name}</div>
+                <div><strong>Identifiant :</strong> ${u.username}</div>
+                <div><strong>Bu\u00e8que :</strong> ${u.buque || '—'}</div>
+                <div><strong>Promotion :</strong> ${u.proms || '—'}</div>
+                <div><strong>Num\u00e9ro :</strong> ${u.nums || '—'}</div>
+                <div><strong>R\u00f4le :</strong> <span style="color: ${u.role === 'admin' ? 'var(--accent-color)' : 'var(--text-secondary)'}">${u.role === 'admin' ? '⭐ Administrateur' : 'Membre'}</span></div>
+                <div style="margin-top:0.5rem; font-size:1.3rem; font-weight:700; color:var(--accent-color)">
+                    <i class="fa-solid fa-coins"></i> ${Math.floor(u.points)} points
+                </div>
+            </div>
+        </div>
+
+        <div class="admin-card" style="border-color:#a855f7; background:rgba(168,85,247,0.06);">
+            <h2 class="admin-header" style="color:#a855f7;"><i class="fa-solid fa-pen"></i> Changer mon nom affich\u00e9</h2>
+            <p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:1rem;">
+                Nom actuel : <strong>${u.name}</strong>. La demande doit \u00eatre valid\u00e9e par un admin.
+            </p>
+            <button class="btn-outline" style="border-color:#a855f7; color:#a855f7;" onclick="app.requestNameChange()">
+                <i class="fa-solid fa-pen-to-square"></i> Demander un changement de nom
+            </button>
+        </div>
+
+        <div class="admin-card">
+            <h2 class="admin-header"><i class="fa-solid fa-key"></i> Changer mon mot de passe</h2>
+            <div style="display:flex; flex-direction:column; gap:0.75rem; max-width:420px;">
+                <input id="oldPass" type="password" placeholder="Ancien mot de passe"
+                    style="padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary);">
+                <input id="newPass" type="password" placeholder="Nouveau mot de passe"
+                    style="padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary);">
+                <input id="newPass2" type="password" placeholder="Confirmer le nouveau mot de passe"
+                    style="padding:0.75rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary);">
+                <button class="btn-primary" onclick="app.changePassword()">
+                    <i class="fa-solid fa-floppy-disk"></i> Enregistrer
+                </button>
+            </div>
+        </div>
+
+        <div class="admin-card">
+            <h2 class="admin-header"><i class="fa-solid fa-clock-rotate-left"></i> Historique des transactions</h2>
+            <div id="txList">${txHtml}</div>
+        </div>
+    `;
+}
+
+function formatTxRow(tx) {
+    const d = new Date(tx.time);
+    const dateStr = d.toLocaleDateString('fr-FR') + ' ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    let amountHtml = '';
+    if (tx.amount > 0) {
+        amountHtml = `<span style="color:#22c55e; font-weight:700;">+${tx.amount} pts</span>`;
+    } else if (tx.amount < 0) {
+        amountHtml = `<span style="color:#ef4444; font-weight:700;">${tx.amount} pts</span>`;
+    } else {
+        amountHtml = `<span style="color:var(--text-secondary); font-weight:700;">— pts</span>`;
+    }
+    return `
+        <div class="user-row" style="flex-direction:row; justify-content:space-between; align-items:center; gap:1rem;">
+            <div>
+                <div style="font-weight:600; font-size:0.95rem;">${tx.desc}</div>
+                <div style="font-size:0.78rem; color:var(--text-secondary); margin-top:0.1rem;">${dateStr}</div>
+            </div>
+            <div>${amountHtml}</div>
+        </div>
+    `;
 }
 
 window.addEventListener('DOMContentLoaded', init);
