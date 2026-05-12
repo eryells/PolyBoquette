@@ -457,6 +457,29 @@ const app = {
         }
     },
 
+    claimDaily: async () => {
+        if(state.useApi) {
+            try {
+                const res = await apiCall('POST', '/api/auth/daily-claim');
+                state.currentUser = res.user;
+                ui.showToast("+5 points récupérés !");
+                updateNavbar();
+                app.navigate('dashboard');
+            } catch(e) {
+                ui.showToast(e.message, 'error');
+            }
+        } else {
+            const today = new Date().toISOString().split('T')[0];
+            if(state.currentUser.lastClaim === today) return ui.showToast("Déjà récupéré aujourd'hui", "error");
+            state.currentUser.lastClaim = today;
+            state.currentUser.points += 5;
+            saveDataLocal();
+            ui.showToast("+5 points récupérés !");
+            updateNavbar();
+            app.navigate('dashboard');
+        }
+    },
+
     // ADMIN
     approveUser: async (id) => {
         if(state.useApi) {
@@ -698,14 +721,14 @@ function renderRegister() {
             <h2 style="margin-bottom: 1.5rem; text-align: center;">Inscription Gadz'arts</h2>
             <div class="trade-input-group">
                 <label>Nom Complet *</label>
-                <input type="text" id="regName" style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:0.75rem;">
+                <input type="text" id="regName" placeholder="Jean Dupont" style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:0.75rem;">
                 <div style="display:flex; gap: 1rem;">
-                    <div style="flex:1"><label>Buque</label><input type="text" id="regBuque" style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:0.75rem;"></div>
-                    <div style="flex:1"><label>Num's</label><input type="text" id="regNums" style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:0.75rem;"></div>
-                    <div style="flex:1"><label>Prom's</label><input type="text" id="regProms" style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:0.75rem;"></div>
+                    <div style="flex:1"><label>Buque</label><input type="text" id="regBuque" placeholder="F'OÜ" style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:0.75rem;"></div>
+                    <div style="flex:1"><label>Num's</label><input type="text" id="regNums" placeholder="11-96(0)" style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:0.75rem;"></div>
+                    <div style="flex:1"><label>Prom's</label><input type="text" id="regProms" placeholder="ME225" style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:0.75rem;"></div>
                 </div>
                 <label>Nom d'utilisateur (Login) *</label>
-                <input type="text" id="regUsername" style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:0.75rem;">
+                <input type="text" id="regUsername" placeholder="Nom+Prénom ou Bucque" style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:0.75rem;">
                 <label>Mot de passe (Login) *</label>
                 <input type="password" id="regPass" style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--bg-secondary); color:var(--text-primary); margin-bottom:1.5rem;">
                 <button class="btn-primary" style="width: 100%" onclick="app.doRegister()">S'inscrire (Nécessite Validation)</button>
@@ -717,11 +740,11 @@ function renderRegister() {
 function renderProposals() {
     if (!state.currentUser) return `<h1>Accès Refusé.</h1>`;
     
-    let html = `
+    return `
         <div style="margin-bottom: 2rem"><button class="btn-outline" onclick="app.navigate('dashboard')"><i class="fa-solid fa-arrow-left"></i> Retour</button></div>
         <h1 class="page-title"><i class="fa-solid fa-lightbulb"></i> Proposer un Pari</h1>
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
-            <div class="trade-section" style="height: fit-content;">
+        <div style="display:flex; justify-content:center; gap: 2rem;">
+            <div class="trade-section" style="width: 100%; max-width: 600px;">
                 <h2>Soumettre une idée</h2>
                 <div class="trade-input-group">
                     <label>Question du pari</label>
@@ -736,37 +759,25 @@ function renderProposals() {
                     <button class="btn-primary btn-block" onclick="app.submitProposal()">Envoyer ma proposition</button>
                 </div>
             </div>
-            <div class="trade-section">
-                <h2>Mes propositions passées</h2>
-                <div class="users-list">
+        </div>
     `;
-    
-    const myProps = state.data.proposals.filter(p => p.authorId === state.currentUser.id);
-    if(myProps.length === 0) {
-        html += `<p style="color:var(--text-secondary)">Vous n'avez pas encore proposé de paris.</p>`;
-    } else {
-        myProps.forEach(p => {
-            let statusColor = p.status === 'approved' ? 'var(--yes-color)' : (p.status === 'rejected' ? 'var(--no-color)' : '#ff9800');
-            let statusText = p.status === 'approved' ? 'Approuvé' : (p.status === 'rejected' ? 'Rejeté' : 'En attente');
-            let note = p.adminNote ? `<div style="font-size:0.8rem; margin-top:0.5rem; padding:0.5rem; background:var(--bg-secondary); border-left:3px solid ${statusColor}">${p.adminNote}</div>` : '';
-            html += `
-                <div class="user-row" style="flex-direction:column; align-items:flex-start; border-color:${statusColor}">
-                    <div style="display:flex; justify-content:space-between; width:100%">
-                        <strong>${p.title}</strong>
-                        <span class="badge" style="background:${statusColor}">${statusText}</span>
-                    </div>
-                    <div style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.3rem">Choix: ${p.choices.join(', ')}</div>
-                    ${note}
-                </div>
-            `;
-        });
-    }
-    html += `</div></div></div>`;
-    return html;
 }
 
 function renderDashboard() {
-    let html = `
+    let dailyBanner = '';
+    if (state.currentUser) {
+        const today = new Date().toISOString().split('T')[0];
+        if (state.currentUser.lastClaim !== today) {
+            dailyBanner = `
+            <div style="background: var(--accent-transparent); border: 1px solid var(--accent-color); color: var(--accent-color); padding: 0.5rem 1rem; border-radius: var(--radius-md); display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; font-size: 0.9rem;">
+                <span><i class="fa-solid fa-gift"></i> Votre gain journalier est disponible !</span>
+                <button class="btn-primary" style="padding: 0.3rem 0.8rem; font-size: 0.8rem;" onclick="app.claimDaily()">Récupérer +5 pts</button>
+            </div>
+            `;
+        }
+    }
+
+    let html = dailyBanner + `
         <div style="display: flex; justify-content: space-between; align-items: center">
             <h1 class="page-title">Marchés Tendances</h1>
         </div>
@@ -1045,7 +1056,11 @@ function initChart(marketId) {
     const market = state.data.markets.find(m => m.id === marketId);
     const isDark = state.theme === 'dark';
     
-    const datasets = market.options.map(opt => ({
+    const currentProbs = getProbabilities(market);
+    // Sort options by probability ascending, so the one with the highest probability is drawn last (on top)
+    const sortedOptions = [...market.options].sort((a, b) => currentProbs[a.id] - currentProbs[b.id]);
+
+    const datasets = sortedOptions.map(opt => ({
         label: opt.label,
         data: market.history.map(h => h[opt.id]),
         borderColor: opt.color,
