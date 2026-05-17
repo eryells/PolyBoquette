@@ -451,7 +451,17 @@ def place_bet(market_id):
     hist = {"time": now_iso, **probs}
     m["history"].append(hist)
 
-    add_tx(user, f"Mise dans '{m['title']}'", -amount)
+    m.setdefault("actionLog", []).append({
+        "time": now_iso,
+        "userId": user["id"],
+        "userName": user["name"],
+        "type": "bet",
+        "amount": amount,
+        "optId": opt_id,
+        "optLabel": opt["label"]
+    })
+
+    add_tx(user, f"Mise dans '{m['title']}' ({opt['label']})", -amount)
 
     save_db(db)
     return jsonify({"user": safe_user(user), "market": m})
@@ -495,12 +505,24 @@ def cashout_bet(market_id, bet_id):
     new_probs = compute_probs(m)
     m["history"].append({"time": now_iso, **new_probs})
 
-    if partial_amount >= bet["amount"]:
+    original_bet_amount = bet["amount"]
+    if partial_amount >= original_bet_amount:
         m["bets"].pop(bet_idx)
     else:
         bet["amount"] -= partial_amount
 
-    add_tx(user, f"Revente dans '{m['title']}'", refund)
+    m.setdefault("actionLog", []).append({
+        "time": now_iso,
+        "userId": user["id"],
+        "userName": user["name"],
+        "type": "cashout",
+        "amount": partial_amount,
+        "cashoutVal": refund,
+        "optId": bet["optId"],
+        "optLabel": opt["label"]
+    })
+
+    add_tx(user, f"Revente {('(partielle) ' if partial_amount < original_bet_amount else '')}'{m['title']}' ({opt['label']})", refund)
 
     save_db(db)
     return jsonify({"user": safe_user(user), "market": m, "refund": refund})
