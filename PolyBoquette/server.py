@@ -57,7 +57,8 @@ DEFAULT_DB = {
             "id": "admin", "username": "admin", "password": "admin123",
             "name": "ADMIN", "role": "admin", "status": "active",
             "points": 1000, "buque": "BDE", "nums": "1", "proms": "Me221",
-            "transactions": []
+            "transactions": [],
+            "pinnedMarkets": []
         }
     },
     "markets": [],
@@ -99,6 +100,8 @@ def _migrate(db):
     for u in db["users"].values():
         if "transactions" not in u:
             u["transactions"] = []
+        if "pinnedMarkets" not in u:
+            u["pinnedMarkets"] = []
     for m in db.get("markets", []):
         if "comments" not in m:
             m["comments"] = []
@@ -1028,6 +1031,33 @@ def admin_reject_name_change(req_id):
     req["status"] = "rejected"
     save_db(db)
     return jsonify({"ok": True})
+
+
+@app.route("/api/users/pin-market", methods=["POST"])
+@login_required
+def toggle_pin_market():
+    data = request.get_json()
+    market_id = data.get("marketId")
+    if not market_id:
+        return jsonify({"error": "marketId requis"}), 400
+    
+    db = load_db()
+    user = db["users"].get(session["user_id"])
+    if not user:
+        return jsonify({"error": "Utilisateur non trouvé"}), 404
+    
+    if "pinnedMarkets" not in user:
+        user["pinnedMarkets"] = []
+        
+    if market_id in user["pinnedMarkets"]:
+        user["pinnedMarkets"].remove(market_id)
+        pinned = False
+    else:
+        user["pinnedMarkets"].append(market_id)
+        pinned = True
+        
+    save_db(db)
+    return jsonify({"user": safe_user(user), "pinned": pinned})
 
 
 # ──────────────────────────────────────────────────────────────────────────────
