@@ -111,8 +111,10 @@ button:active {
   letter-spacing: -0.5px;
 }
 
-.brand i {
-  font-size: 1.8rem;
+.brand img {
+  height: 2.2rem;
+  width: auto;
+  object-fit: contain;
 }
 
 .nav-actions {
