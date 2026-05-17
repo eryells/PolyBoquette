@@ -237,22 +237,29 @@ const app = {
         container.innerHTML = '<div style="text-align:center; padding: 2rem;"><i class="fa-solid fa-spinner fa-spin fa-2x"></i></div>'; 
         
         if(state.useApi) await refreshServerData();
+        
+        app.renderCurrentView(isNewMarket);
+    },
 
-        if (view === 'dashboard') container.innerHTML = renderDashboard();
-        else if (view === 'market') {
-            const market = state.data.markets.find(m => m.id === id);
+    renderCurrentView: (isNewMarket = false) => {
+        const container = document.getElementById('app-container');
+        if(!container) return;
+        
+        if (state.currentView === 'dashboard') container.innerHTML = renderDashboard();
+        else if (state.currentView === 'market') {
+            const market = state.data.markets.find(m => m.id === state.currentMarketId);
             if(!market) return container.innerHTML = '<p>Introuvable</p>';
             if (isNewMarket) {
                 state.selectedOptionId = market.options[0].id;
             }
-            container.innerHTML = renderMarket(id);
-            setTimeout(() => initChart(id), 10);
+            container.innerHTML = renderMarket(state.currentMarketId);
+            setTimeout(() => initChart(state.currentMarketId), 10);
         }
-        else if (view === 'admin') container.innerHTML = renderAdmin();
-        else if (view === 'login') container.innerHTML = renderLogin();
-        else if (view === 'register') container.innerHTML = renderRegister();
-        else if (view === 'proposals') container.innerHTML = renderProposals();
-        else if (view === 'profile') container.innerHTML = renderProfile();
+        else if (state.currentView === 'admin') container.innerHTML = renderAdmin();
+        else if (state.currentView === 'login') container.innerHTML = renderLogin();
+        else if (state.currentView === 'register') container.innerHTML = renderRegister();
+        else if (state.currentView === 'proposals') container.innerHTML = renderProposals();
+        else if (state.currentView === 'profile') container.innerHTML = renderProfile();
     },
 
     selectOption: (optId) => {
@@ -714,7 +721,7 @@ const app = {
 
                 if (state.useApi) {
                     try {
-                        await apiCall('POST', '/api/admin/markets', { title, choices, image: imgIn });
+                        await apiCall('POST', '/api/admin/markets', { title, choices, image: imgIn, categoryId });
                         ui.showToast("Marché créé !");
                     } catch(e) {
                         return ui.showToast(e.message, 'error');
@@ -959,14 +966,14 @@ const app = {
 
     handleAdminSearch: () => {
         state.adminSearch = document.getElementById('adminSearchInput').value;
-        app.render();
+        app.renderCurrentView();
         const inp = document.getElementById('adminSearchInput');
         if(inp) { inp.focus(); inp.selectionStart = inp.selectionEnd = inp.value.length; }
     },
 
     handleAdminSort: () => {
         state.adminSortBy = document.getElementById('adminSortSelect').value;
-        app.render();
+        app.renderCurrentView();
     },
 
     postComment: async (marketId) => {
