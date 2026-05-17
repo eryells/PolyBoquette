@@ -620,6 +620,28 @@ button:active {
     width: 34px;
     height: 34px;
   }
+  .market-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  .market-card {
+    padding: 1rem;
+    gap: 0.5rem;
+  }
+  .market-card-header {
+    margin-bottom: 0.2rem;
+  }
+  .market-icon img {
+    width: 36px;
+    height: 36px;
+  }
+  .market-title {
+    font-size: 0.95rem;
+    margin: 0.3rem 0;
+  }
+  .market-volume {
+    font-size: 0.75rem;
+  }
   .container {
     padding: 1rem;
   }
