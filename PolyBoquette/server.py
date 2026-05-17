@@ -728,6 +728,7 @@ def admin_create_market():
     title   = (data.get("title") or "").strip()
     choices = data.get("choices", [])
     image   = (data.get("image") or "").strip()
+    category_id = data.get("categoryId")
     db = load_db()
 
     if not title or len(choices) < 2:
@@ -746,6 +747,8 @@ def admin_create_market():
         "image": image or "https://images.unsplash.com/photo-1550565118-3a14e8d0386f?auto=format&fit=crop&w=150&q=80",
         "volume": 0, "status": "open", "resolvedWinner": None,
         "bets": [], "options": options,
+        "categoryId": category_id,
+        "order": 999,
         "history": [{"time": "Début", **init_probs}]
     }
     db["markets"].append(new_market)
