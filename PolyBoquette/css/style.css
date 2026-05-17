@@ -970,3 +970,19 @@ button:active {
     color: var(--text-primary);
     outline: none;
 }
+
+/* Pin & Collapse UI */
+.pin-btn:hover {
+    color: var(--accent-color) !important;
+    background: var(--bg-card-hover) !important;
+    transform: scale(1.1);
+}
+.pin-btn.pinned {
+    color: var(--accent-color) !important;
+}
+.category-header {
+    transition: background-color 0.2s;
+}
+.category-header:hover {
+    background-color: var(--bg-card-hover);
+}
