@@ -257,6 +257,12 @@ def css(filename):
 def js(filename):
     return send_from_directory(os.path.join(BASE_DIR, "js"), filename)
 
+@app.route("/<path:filename>")
+def root_static(filename):
+    if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.svg', '.gif', '.ico')):
+        return send_from_directory(BASE_DIR, filename)
+    abort(404)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # AUTH
