@@ -20,7 +20,8 @@ const state = {
     chartHidden: false,
     leaderboard: [],
     canClaim: false,
-    dashTab: 'markets'   // 'markets' | 'leaderboard'
+    dashTab: 'markets',   // 'markets' | 'leaderboard'
+    collapsedCategories: JSON.parse(localStorage.getItem('collapsedCategories') || '{}')
 };
 
 const PALETTE = ['#22c55e', '#ef4444', '#3b82f6', '#d946ef', '#f97316', '#eab308', '#06b6d4'];
@@ -1000,6 +1001,40 @@ const app = {
         app.renderCurrentView();
     },
 
+    toggleCategoryCollapse: (catId) => {
+        state.collapsedCategories[catId] = !state.collapsedCategories[catId];
+        localStorage.setItem('collapsedCategories', JSON.stringify(state.collapsedCategories));
+        app.renderCurrentView();
+    },
+
+    togglePinMarket: async (marketId) => {
+        if (!state.currentUser) return ui.showToast("Vous devez être connecté", "error");
+        if (state.useApi) {
+            try {
+                const res = await apiCall('POST', '/api/users/pin-market', {marketId});
+                state.currentUser = res.user;
+                app.renderCurrentView();
+                ui.showToast(res.pinned ? "Pari épinglé" : "Pari désépinglé");
+            } catch(e) {
+                return ui.showToast(e.message, 'error');
+            }
+        } else {
+            if (!state.currentUser.pinnedMarkets) state.currentUser.pinnedMarkets = [];
+            let pinned = false;
+            const idx = state.currentUser.pinnedMarkets.indexOf(marketId);
+            if (idx === -1) {
+                state.currentUser.pinnedMarkets.push(marketId);
+                pinned = true;
+            } else {
+                state.currentUser.pinnedMarkets.splice(idx, 1);
+            }
+            state.data.users[state.currentUser.id].pinnedMarkets = state.currentUser.pinnedMarkets;
+            saveDataLocal();
+            app.renderCurrentView();
+            ui.showToast(pinned ? "Pari épinglé" : "Pari désépinglé");
+        }
+    },
+
     postComment: async (marketId) => {
         const input = document.getElementById('commentInput');
         if (!input) return;
@@ -1578,6 +1613,16 @@ function renderDashboard() {
             `;
         }
 
+        let pinBtn = '';
+        if (state.currentUser) {
+            const isPinned = state.currentUser.pinnedMarkets && state.currentUser.pinnedMarkets.includes(m.id);
+            pinBtn = `
+                <button class="btn-icon pin-btn ${isPinned ? 'pinned' : ''}" onclick="event.stopPropagation(); app.togglePinMarket('${m.id}')" title="Épingler" style="position:absolute; top:1rem; left:1rem; width:30px; height:30px; background:var(--bg-secondary); border:none; color:${isPinned ? 'var(--accent-color)' : 'var(--text-secondary)'};">
+                    <i class="fa-solid fa-thumbtack"></i>
+                </button>
+            `;
+        }
+
         const myBetBadge = hasMyBet
             ? `<span style="display:inline-block; font-size:0.7rem; font-weight:700;
                            padding:0.15rem 0.45rem; border-radius:20px;
@@ -1590,8 +1635,9 @@ function renderDashboard() {
             
         return `
             <div class="market-card" data-id="${m.id}" style="position:relative; ${cardStyle}" onclick="app.navigate('market', '${m.id}')">
+                ${pinBtn}
                 ${adminMenu}
-                <div class="market-card-header" style="padding-right: 2rem;">
+                <div class="market-card-header" style="padding-right: 2rem; padding-left: 2rem;">
                     <div class="market-icon"><img src="${m.image}" alt=""></div>
                     <div style="display:flex; flex-direction:column; align-items:flex-end;">
                         ${m.status === 'resolved' ? `<span style="font-size:0.7rem; padding:0.2rem 0.5rem; background:var(--bg-secondary); border-radius:4px; font-weight:bold; color:var(--text-secondary); margin-bottom:0.3rem;">CLÔTURÉ</span>` : ''}
@@ -1618,50 +1664,65 @@ function renderDashboard() {
         </div>`;
     }
 
-    const renderCategory = (catId, catName, mList) => {
+    const renderCategory = (catId, catName, mList, isPinnedCat = false) => {
         if (!state.editMode && mList.length === 0 && catId !== 'uncategorized') return '';
         if (!state.editMode && mList.length === 0 && catId === 'uncategorized' && categories.length > 0) return '';
         
-        let html = `<div class="category-container" data-cat-id="${catId}">`;
+        const isCollapsed = state.collapsedCategories[catId];
+        let html = `<div class="category-container ${isCollapsed ? 'collapsed' : ''}" data-cat-id="${catId}">`;
         
         let actions = '';
-        if (state.editMode) {
+        if (state.editMode && !isPinnedCat) {
             actions = `
                 <div style="display:flex; gap:0.5rem; align-items:center;">
-                    ${catId !== 'uncategorized' ? `<button class="btn-icon" onclick="app.adminDeleteCategory('${catId}')"><i class="fa-solid fa-trash" style="color:var(--no-color)"></i></button>` : ''}
-                    <div class="drag-handle cat-drag-handle"><i class="fa-solid fa-grip-lines"></i></div>
+                    ${catId !== 'uncategorized' ? `<button class="btn-icon" onclick="event.stopPropagation(); app.adminDeleteCategory('${catId}')"><i class="fa-solid fa-trash" style="color:var(--no-color)"></i></button>` : ''}
+                    <div class="drag-handle cat-drag-handle" onclick="event.stopPropagation();"><i class="fa-solid fa-grip-lines"></i></div>
                 </div>
             `;
         }
         
         const displayName = catId === 'uncategorized' && categories.length === 0 ? 'Paris en cours' : catName;
+        const icon = isPinnedCat ? '<i class="fa-solid fa-thumbtack" style="color:var(--accent-color)"></i>' : '<i class="fa-solid fa-fire" style="color:var(--accent-color)"></i>';
         
         html += `
-            <div class="category-header">
-                <div class="category-title"><i class="fa-solid fa-fire" style="color:var(--accent-color)"></i> ${displayName}</div>
+            <div class="category-header" onclick="app.toggleCategoryCollapse('${catId}')" style="cursor:pointer; user-select:none;">
+                <div class="category-title" style="display:flex; align-items:center; gap:0.5rem;">
+                    <i class="fa-solid fa-chevron-down collapse-icon" style="font-size:0.8rem; transition:transform 0.2s; ${isCollapsed ? 'transform:rotate(-90deg);' : ''}"></i>
+                    ${icon} ${displayName}
+                </div>
                 ${actions}
             </div>
         `;
         
-        if (mList.length === 0) {
+        html += `<div class="category-content" style="${isCollapsed ? 'display:none;' : ''}">`;
+        if (mList.length === 0 && state.editMode && !isPinnedCat) {
              html += `<div class="market-list" data-cat-id="${catId}" style="min-height:100px; border:2px dashed var(--border-color); border-radius:var(--radius-md); display:flex; align-items:center; justify-content:center; color:var(--text-secondary);">Déposez des paris ici</div>`;
         } else {
-             html += `<div class="market-grid market-list" data-cat-id="${catId}" style="min-height:50px;">`;
+             html += `<div class="market-grid ${!isPinnedCat ? 'market-list' : ''}" data-cat-id="${catId}" style="min-height:50px;">`;
              mList.forEach(m => { html += renderMarketCard(m); });
              html += `</div>`;
         }
         
-        if (state.editMode) {
+        if (state.editMode && !isPinnedCat) {
             html += `<div style="margin-top:1rem; text-align:center;">
                 <button class="btn-outline" onclick="app.adminCreateMarket('${catId === 'uncategorized' ? '' : catId}')"><i class="fa-solid fa-plus"></i> Créer un pari officiel ici</button>
             </div>`;
         }
         
-        html += `</div>`;
+        html += `</div></div>`;
         return html;
     };
 
     marketsHtml += `<div id="categories-container" class="${state.editMode ? 'edit-mode-active' : ''}">`;
+    
+    // Pinned Markets Category
+    if (state.currentUser && state.currentUser.pinnedMarkets && state.currentUser.pinnedMarkets.length > 0) {
+        const pinnedList = openMarkets.filter(m => state.currentUser.pinnedMarkets.includes(m.id));
+        if (pinnedList.length > 0) {
+            marketsHtml += renderCategory('pinned', 'Mes paris épinglés', pinnedList, true);
+        }
+    }
+
     categories.forEach(c => {
         marketsHtml += renderCategory(c.id, c.name, grouped[c.id]);
     });
