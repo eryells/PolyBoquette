@@ -966,6 +966,7 @@ const app = {
 
     handleAdminSearch: () => {
         state.adminSearch = document.getElementById('adminSearchInput').value;
+        state.adminSortBy = document.getElementById('adminSortSelect').value;
         app.renderCurrentView();
         const inp = document.getElementById('adminSearchInput');
         if(inp) { inp.focus(); inp.selectionStart = inp.selectionEnd = inp.value.length; }
@@ -2008,8 +2009,9 @@ function renderAdmin() {
         <div class="admin-card">
             <h2 class="admin-header"><i class="fa-solid fa-users"></i> Membres Actifs &amp; Points</h2>
             <div class="admin-toolbar" style="display:flex; gap:1rem; margin-bottom:1rem; flex-wrap:wrap; background:var(--bg-secondary); padding:1rem; border-radius:var(--radius-md); border:1px solid var(--border-color);">
-                <div style="flex:1; min-width:200px;">
-                    <input type="text" id="adminSearchInput" placeholder="Rechercher un membre (pseudo, buque, noms)..." value="${state.adminSearch || ''}" oninput="app.handleAdminSearch()" style="width:100%; padding:0.5rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary);">
+                <div style="flex:1; min-width:200px; display:flex; gap:0.5rem;">
+                    <input type="text" id="adminSearchInput" placeholder="Rechercher un membre (pseudo, buque, noms)..." value="${state.adminSearch || ''}" onkeypress="if(event.key==='Enter') app.handleAdminSearch()" style="flex:1; padding:0.5rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary);">
+                    <button class="btn-primary" onclick="app.handleAdminSearch()" style="padding:0.5rem 1rem;"><i class="fa-solid fa-magnifying-glass"></i> Rechercher</button>
                 </div>
                 <div>
                     <select id="adminSortSelect" onchange="app.handleAdminSort()" style="padding:0.5rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary);">
