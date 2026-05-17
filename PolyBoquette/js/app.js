@@ -336,7 +336,17 @@ const app = {
                 });
             }
             market.history.push({ time: now_iso, ...probs });
-            addLocalTx(state.currentUser, `Mise dans '${market.title}'`, -amount);
+            addLocalTx(state.currentUser, `Mise dans '${market.title}' (${option.label})`, -amount);
+            if (!market.actionLog) market.actionLog = [];
+            market.actionLog.push({
+                time: now_iso,
+                userId: state.currentUser.id,
+                userName: state.currentUser.name,
+                type: 'bet',
+                amount: amount,
+                optId: optId,
+                optLabel: option.label
+            });
             state.data.users[state.currentUser.id].points = state.currentUser.points;
             saveDataLocal();
             ui.showToast("Mise effectuée avec succès !");
@@ -379,13 +389,26 @@ const app = {
             const newProbs = getProbabilities(market);
             market.history.push({ time: new Date().toISOString(), ...newProbs });
 
-            if (sellAmt >= bet.amount) {
+            const originalBetAmount = bet.amount;
+            if (sellAmt >= originalBetAmount) {
                 market.bets.splice(betIndex, 1);
             } else {
                 bet.amount -= sellAmt;
             }
 
-            addLocalTx(state.currentUser, `Revente dans '${market.title}'`, refund);
+            if (!market.actionLog) market.actionLog = [];
+            market.actionLog.push({
+                time: new Date().toISOString(),
+                userId: state.currentUser.id,
+                userName: state.currentUser.name,
+                type: 'cashout',
+                amount: sellAmt,
+                cashoutVal: refund,
+                optId: bet.optId,
+                optLabel: opt.label
+            });
+
+            addLocalTx(state.currentUser, `Revente ${sellAmt < originalBetAmount ? '(partielle) ' : ''}'${market.title}' (${opt.label})`, refund);
             state.data.users[state.currentUser.id].points = state.currentUser.points;
             saveDataLocal();
             ui.showToast(`Revente effectuée : +${refund} points.`);
@@ -1004,6 +1027,42 @@ const app = {
         }
         input.value = '';
         app.navigate('market', marketId);
+    },
+
+    viewMarketHistory: (marketId) => {
+        const m = state.data.markets.find(x => x.id === marketId);
+        if(!m) return;
+        let html = '';
+        const logs = m.actionLog || [];
+        if(logs.length === 0) {
+            html = '<p style="color:var(--text-secondary)">Aucun historique disponible pour ce marché.</p>';
+        } else {
+            html += '<div style="max-height:400px; overflow-y:auto; display:flex; flex-direction:column; gap:0.5rem;">';
+            // Order chronologique -> reverse so newest is on top? Actually chronological means oldest first, but maybe newest first is better? 
+            // The user said "dans l'ordre chronologique", which means oldest to newest. Let's do oldest to newest.
+            logs.forEach(log => {
+                const dateStr = new Date(log.time).toLocaleString();
+                let desc = '';
+                if(log.type === 'bet') {
+                    desc = `<span style="color:var(--yes-color); font-weight:bold;">Mise</span> de <strong>${log.amount} pts</strong> sur l'option <em>${log.optLabel}</em>`;
+                } else if(log.type === 'cashout') {
+                    desc = `<span style="color:var(--error-color); font-weight:bold;">Revente</span> de <strong>${log.amount} pts</strong> sur l'option <em>${log.optLabel}</em> (Gain: ${log.cashoutVal} pts)`;
+                } else {
+                    desc = log.type;
+                }
+                html += `
+                    <div style="padding:0.75rem; border-radius:var(--radius-sm); border:1px solid var(--border-color); background:var(--bg-secondary);">
+                        <div style="display:flex; justify-content:space-between; font-size:0.85rem; color:var(--text-secondary); margin-bottom:0.4rem;">
+                            <strong style="color:var(--text-primary)">${log.userName}</strong>
+                            <span>${dateStr}</span>
+                        </div>
+                        <div style="font-size:0.95rem;">${desc}</div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+        }
+        ui.showModal(`Historique: ${m.title}`, html, () => ui.closeModal(true), "Fermer");
     },
 
     changePassword: async () => {
@@ -1809,6 +1868,15 @@ function renderMarket(id) {
     });
     commentsHtml += `</div>`;
 
+    let adminHistoryBtn = '';
+    if (state.currentUser && state.currentUser.role === 'admin') {
+        adminHistoryBtn = `
+            <button class="btn-outline" style="margin-left: 0.5rem; padding: 0.3rem 0.6rem; font-size: 0.8rem; border-color: var(--accent-color); color: var(--accent-color); vertical-align: middle;" onclick="app.viewMarketHistory('${m.id}')">
+                <i class="fa-solid fa-list-ul"></i> Historique
+            </button>
+        `;
+    }
+
     return `
         <button class="btn-outline" style="margin-bottom: 2rem" onclick="app.navigate('dashboard')">
             <i class="fa-solid fa-arrow-left"></i> Retour
@@ -1819,7 +1887,7 @@ function renderMarket(id) {
                 <div class="chart-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem;">
                     <div style="display:flex; align-items:center; gap:1rem;">
                         <img src="${m.image}" alt="" style="width: 56px; height: 56px; border-radius: 8px; flex-shrink:0;">
-                        <h1 style="font-size: 1.3rem; line-height:1.3;">${m.title}</h1>
+                        <h1 style="font-size: 1.3rem; line-height:1.3;">${m.title}${adminHistoryBtn}</h1>
                     </div>
                     <button class="chart-toggle-btn" onclick="app.toggleChart()" id="chartToggleBtn">
                         ${state.chartHidden ? '<i class="fa-solid fa-chart-line"></i> Afficher' : '<i class="fa-solid fa-eye-slash"></i> Masquer'} le graphe
@@ -2009,9 +2077,8 @@ function renderAdmin() {
         <div class="admin-card">
             <h2 class="admin-header"><i class="fa-solid fa-users"></i> Membres Actifs &amp; Points</h2>
             <div class="admin-toolbar" style="display:flex; gap:1rem; margin-bottom:1rem; flex-wrap:wrap; background:var(--bg-secondary); padding:1rem; border-radius:var(--radius-md); border:1px solid var(--border-color);">
-                <div style="flex:1; min-width:200px; display:flex; gap:0.5rem;">
-                    <input type="text" id="adminSearchInput" placeholder="Rechercher un membre (pseudo, buque, noms)..." value="${state.adminSearch || ''}" onkeypress="if(event.key==='Enter') app.handleAdminSearch()" style="flex:1; padding:0.5rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary);">
-                    <button class="btn-primary" onclick="app.handleAdminSearch()" style="padding:0.5rem 1rem;"><i class="fa-solid fa-magnifying-glass"></i> Rechercher</button>
+                <div style="flex:1; min-width:200px;">
+                    <input type="text" id="adminSearchInput" placeholder="Rechercher un membre (pseudo, buque, noms)..." value="${state.adminSearch || ''}" oninput="app.handleAdminSearch()" style="width:100%; padding:0.5rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary);">
                 </div>
                 <div>
                     <select id="adminSortSelect" onchange="app.handleAdminSort()" style="padding:0.5rem; border-radius:var(--radius-md); border:1px solid var(--border-color); background:var(--bg-card); color:var(--text-primary);">
