@@ -804,8 +804,8 @@ function renderDashboard() {
                <div class="market-card-header">
                     <div class="market-icon"><img src="${m.image}" alt=""></div>
                     <div style="display:flex; flex-direction:column; align-items:flex-end;">
-                        ${m.status === 'resolved' ? \`<span style="font-size:0.7rem; padding:0.2rem 0.5rem; background:var(--bg-secondary); border-radius:4px; font-weight:bold; color:var(--text-secondary); margin-bottom:0.3rem;">CLÔTURÉ</span>\` : ''}
-                        ${m.status === 'paused' ? \`<span style="font-size:0.7rem; padding:0.2rem 0.5rem; background:var(--accent-transparent); border-radius:4px; font-weight:bold; color:var(--accent-color); margin-bottom:0.3rem;">PAUSE</span>\` : ''}
+                        ${m.status === 'resolved' ? `<span style="font-size:0.7rem; padding:0.2rem 0.5rem; background:var(--bg-secondary); border-radius:4px; font-weight:bold; color:var(--text-secondary); margin-bottom:0.3rem;">CLÔTURÉ</span>` : ''}
+                        ${m.status === 'paused' ? `<span style="font-size:0.7rem; padding:0.2rem 0.5rem; background:var(--accent-transparent); border-radius:4px; font-weight:bold; color:var(--accent-color); margin-bottom:0.3rem;">PAUSE</span>` : ''}
                         <span class="market-volume"><i class="fa-solid fa-chart-simple"></i> Vol: ${m.volume} pts</span>
                     </div>
                 </div>

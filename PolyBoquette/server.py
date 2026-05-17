@@ -56,11 +56,12 @@ DEFAULT_DB = {
         "admin": {
             "id": "admin", "username": "admin", "password": "admin123",
             "name": "ADMIN", "role": "admin", "status": "active",
-            "points": 1000, "buque": "admin", "nums": "00", "proms": "Me225",
+            "points": 1000, "buque": "BDE", "nums": "1", "proms": "Me221",
             "transactions": []
         }
     },
     "markets": [],
+    "categories": [],
     "proposals": [],
     "admin_grants_log": [],
     "name_change_requests": []
@@ -87,6 +88,8 @@ def _ensure_pg_table(conn):
 
 def _migrate(db):
     """Applique les migrations sur une DB chargée."""
+    if "categories" not in db:
+        db["categories"] = []
     if "proposals" not in db:
         db["proposals"] = []
     if "admin_grants_log" not in db:
@@ -96,6 +99,15 @@ def _migrate(db):
     for u in db["users"].values():
         if "transactions" not in u:
             u["transactions"] = []
+    for m in db.get("markets", []):
+        if "comments" not in m:
+            m["comments"] = []
+        if "pauseAt" not in m:
+            m["pauseAt"] = None
+        if "categoryId" not in m:
+            m["categoryId"] = None
+        if "order" not in m:
+            m["order"] = 0
     return db
 
 
@@ -214,6 +226,20 @@ def add_tx(user, desc, amount):
     })
     # Garder seulement les 50 dernières
     user["transactions"] = user["transactions"][:50]
+
+
+def is_market_open(market):
+    if market.get("status") != "open":
+        return False
+    pause_at = market.get("pauseAt")
+    if pause_at:
+        now = datetime.now(timezone.utc).isoformat()
+        # Handle JS ISO string format mapping
+        if pause_at.endswith('Z'):
+            pause_at = pause_at[:-1] + '+00:00'
+        if now >= pause_at:
+            return False
+    return True
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -356,6 +382,13 @@ def get_markets():
     return jsonify(db["markets"])
 
 
+@app.route("/api/categories")
+@login_required
+def get_categories():
+    db = load_db()
+    return jsonify(db.get("categories", []))
+
+
 @app.route("/api/markets/<market_id>")
 @login_required
 def get_market(market_id):
@@ -378,8 +411,8 @@ def place_bet(market_id):
     m = next((m for m in db["markets"] if m["id"] == market_id), None)
     if not m:
         return jsonify({"error": "Marché introuvable"}), 404
-    if m["status"] != "open":
-        return jsonify({"error": "Ce marché n'accepte plus de transactions"}), 400
+    if not is_market_open(m):
+        return jsonify({"error": "Ce marché n'accepte plus de transactions (fermé ou en pause)"}), 400
     if not isinstance(amount, int) or amount <= 0:
         return jsonify({"error": "Montant invalide"}), 400
     if user["points"] < amount:
@@ -431,8 +464,8 @@ def cashout_bet(market_id, bet_id):
     db = load_db()
     user = db["users"].get(session["user_id"])
     m = next((m for m in db["markets"] if m["id"] == market_id), None)
-    if not m or m["status"] != "open":
-        return jsonify({"error": "Revente impossible"}), 400
+    if not m or not is_market_open(m):
+        return jsonify({"error": "Revente impossible (marché fermé ou en pause)"}), 400
     bet_idx = next((i for i, b in enumerate(m["bets"]) if b["id"] == bet_id), None)
     if bet_idx is None:
         return jsonify({"error": "Pari introuvable"}), 404
@@ -471,6 +504,35 @@ def cashout_bet(market_id, bet_id):
 
     save_db(db)
     return jsonify({"user": safe_user(user), "market": m, "refund": refund})
+
+
+@app.route("/api/markets/<market_id>/comments", methods=["POST"])
+@login_required
+def post_comment(market_id):
+    data = request.get_json()
+    text = data.get("text", "").strip()
+    if not text:
+        return jsonify({"error": "Commentaire vide"}), 400
+        
+    db = load_db()
+    user = db["users"].get(session["user_id"])
+    m = next((m for m in db["markets"] if m["id"] == market_id), None)
+    if not m:
+        return jsonify({"error": "Marché introuvable"}), 404
+        
+    if "comments" not in m:
+        m["comments"] = []
+        
+    comment = {
+        "id": "c" + secrets.token_hex(6),
+        "userId": user["id"],
+        "userName": user["name"],
+        "text": text,
+        "time": datetime.now(timezone.utc).isoformat()
+    }
+    m["comments"].append(comment)
+    save_db(db)
+    return jsonify({"ok": True, "comment": comment})
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -694,13 +756,25 @@ def admin_create_market():
 @app.route("/api/admin/markets/<market_id>/toggle-pause", methods=["POST"])
 @admin_required
 def admin_toggle_pause(market_id):
+    data = request.get_json() or {}
     db = load_db()
     m = next((m for m in db["markets"] if m["id"] == market_id), None)
     if not m:
         return jsonify({"error": "Introuvable"}), 404
-    m["status"] = "paused" if m["status"] == "open" else "open"
+        
+    if m["status"] == "open":
+        pause_at = data.get("pauseAt")
+        if pause_at == "now":
+            m["status"] = "paused"
+            m["pauseAt"] = None
+        else:
+            m["pauseAt"] = pause_at # ISO string future date
+    else:
+        m["status"] = "open"
+        m["pauseAt"] = None
+        
     save_db(db)
-    return jsonify({"status": m["status"]})
+    return jsonify({"status": m["status"], "pauseAt": m.get("pauseAt")})
 
 
 @app.route("/api/admin/markets/<market_id>/resolve", methods=["POST"])
@@ -778,6 +852,73 @@ def get_user_transactions(user_id):
     if not target:
         return jsonify({"error": "Utilisateur introuvable"}), 404
     return jsonify(target.get("transactions", []))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ADMIN - CATÉGORIES & REORDERING
+# ──────────────────────────────────────────────────────────────────────────────
+@app.route("/api/admin/categories", methods=["GET", "POST"])
+@admin_required
+def admin_categories():
+    db = load_db()
+    if request.method == "GET":
+        return jsonify(db.get("categories", []))
+        
+    # POST
+    data = request.get_json()
+    action = data.get("action")
+    if action == "create":
+        name = data.get("name", "").strip()
+        if not name:
+            return jsonify({"error": "Nom requis"}), 400
+        new_cat = {
+            "id": "cat_" + secrets.token_hex(4),
+            "name": name,
+            "order": len(db.get("categories", []))
+        }
+        if "categories" not in db:
+            db["categories"] = []
+        db["categories"].append(new_cat)
+        save_db(db)
+        return jsonify({"ok": True, "category": new_cat})
+    elif action == "delete":
+        cat_id = data.get("id")
+        db["categories"] = [c for c in db.get("categories", []) if c["id"] != cat_id]
+        # Reset market categories that were in this category
+        for m in db["markets"]:
+            if m.get("categoryId") == cat_id:
+                m["categoryId"] = None
+        save_db(db)
+        return jsonify({"ok": True})
+    return jsonify({"error": "Action inconnue"}), 400
+
+
+@app.route("/api/admin/markets/reorder", methods=["POST"])
+@admin_required
+def admin_reorder_markets():
+    data = request.get_json()
+    categories = data.get("categories", []) # list of {id, order}
+    markets = data.get("markets", []) # list of {id, categoryId, order}
+    
+    db = load_db()
+    if "categories" not in db:
+        db["categories"] = []
+        
+    # Update categories order
+    for c_data in categories:
+        c = next((c for c in db["categories"] if c["id"] == c_data["id"]), None)
+        if c:
+            c["order"] = c_data["order"]
+            
+    # Update markets category and order
+    for m_data in markets:
+        m = next((m for m in db["markets"] if m["id"] == m_data["id"]), None)
+        if m:
+            m["categoryId"] = m_data.get("categoryId")
+            m["order"] = m_data.get("order", 0)
+            
+    save_db(db)
+    return jsonify({"ok": True})
 
 
 # ──────────────────────────────────────────────────────────────────────────────
